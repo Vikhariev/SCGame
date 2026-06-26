@@ -118,6 +118,21 @@
   }
   .iconbtn:active{ transform:scale(.94); }
   .iconbtn[disabled]{ opacity:.35; pointer-events:none; }
+  .iconbtn.bomb{ font-size:15px; font-weight:800; gap:1px; }
+  .iconbtn.bomb.armed{ background:rgba(255,112,67,.30); border-color:#ff7043;
+    box-shadow:0 0 14px rgba(255,112,67,.6); opacity:1; }
+  /* Perk draft */
+  .perks{ display:flex; gap:10px; flex-wrap:wrap; justify-content:center; }
+  .perk-card{
+    width:118px; background:rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.14);
+    border-radius:14px; padding:14px 10px; cursor:pointer; color:var(--ink); text-align:center;
+    transition:transform .08s ease, background .15s ease, border-color .15s ease;
+  }
+  .perk-card:hover{ background:rgba(255,255,255,.14); border-color:rgba(255,255,255,.3); }
+  .perk-card:active{ transform:scale(.96); }
+  .perk-ico{ font-size:30px; line-height:1; }
+  .perk-name{ font-weight:800; font-size:14px; margin-top:6px; }
+  .perk-desc{ font-size:11px; color:var(--muted); margin-top:4px; line-height:1.35; }
 </style>
 </head>
 <body>
@@ -144,10 +159,10 @@
 
     <div class="overlay show" id="startScreen">
       <h2>Orbit Merge</h2>
-      <p>Drop glowing orbs. Two of the same <b>merge</b> into a bigger one. Chain them up — but don't let the jar overflow!</p>
+      <p>Drop orbs, <b>merge</b> matching pairs. But the <b style="color:var(--danger)">Reactor</b> pushes new rows up from below — and speeds up. Survive! Chain 4+ to earn a 💣.</p>
       <div class="merge-chain" id="chainPreview"></div>
       <button class="cta" id="playBtn">Play</button>
-      <p style="font-size:11px">Move with mouse / finger · release to drop</p>
+      <p style="font-size:11px">Move to aim · release to drop · tap 💣 then drop to blast</p>
     </div>
 
     <div class="overlay" id="overScreen">
@@ -162,15 +177,21 @@
       <button class="cta" id="resumeBtn">Resume</button>
       <button class="ghost" id="restartBtn2">Restart</button>
     </div>
+
+    <div class="overlay" id="perkScreen">
+      <h2 id="perkWaveLabel">Pick a perk</h2>
+      <div class="perks" id="perkCards"></div>
+    </div>
   </div>
 
   <div class="controls">
     <button class="iconbtn" id="pauseBtn" title="Pause" aria-label="Pause" disabled>⏸</button>
     <button class="iconbtn" id="restartBtn" title="Restart" aria-label="Restart" disabled>↺</button>
+    <button class="iconbtn bomb" id="bombBtn" title="Bomb (tap to arm, then drop)" aria-label="Bomb" disabled>💣0</button>
     <button class="iconbtn" id="soundBtn" title="Sound" aria-label="Sound">🔊</button>
   </div>
 
-  <div class="hint">Tip: keep small orbs near the top, build big ones at the bottom.</div>
+  <div class="hint">The Reactor rises faster over time — merge fast, save 💣 for emergencies.</div>
   <footer>Made with ♥ — a juicy casual merge game.</footer>
 </div>
 
@@ -191,9 +212,13 @@ const pauseScreen = document.getElementById('pauseScreen');
 const soundBtn = document.getElementById('soundBtn');
 const pauseBtn = document.getElementById('pauseBtn');
 const restartBtn = document.getElementById('restartBtn');
+const bombBtn = document.getElementById('bombBtn');
 const restartBtn2 = document.getElementById('restartBtn2');
 const resumeBtn = document.getElementById('resumeBtn');
 const nextOrbEl = document.getElementById('nextOrb');
+const perkScreen = document.getElementById('perkScreen');
+const perkCards = document.getElementById('perkCards');
+const perkWaveLabel = document.getElementById('perkWaveLabel');
 const coach = document.getElementById('coach');
 const coachText = document.getElementById('coachText');
 const coachSkip = document.getElementById('coachSkip');
@@ -218,18 +243,31 @@ bestEl.textContent = best;
 // Single source of truth for balance — tune the game here (and A/B-able later).
 const CONFIG = {
   physics: { grav:0.42, rest:0.12, friction:0.985, substeps:8 },
-  // Small well (low capacity) so drops overwhelm merge throughput and the pile
-  // genuinely rises — overflow is a constant threat regardless of where you drop.
-  jar:     { wall:10, marginX:105, floorInset:14, dropY:52, deadLine:150 },
+  // Comfortable, playable well — the pressure now comes from the Reactor surges
+  // rising from below, not from cramped geometry.
+  jar:     { wall:10, marginX:26, floorInset:14, dropY:48, deadLine:148 },
   spawn:   {
     maxTier:4, maxTierLate:5,                     // bigger orbs start dropping as you climb
     weights:    [0.5,  0.30, 0.14, 0.06, 0.0 ],   // early game — mostly small orbs
-    weightsLate:[0.10, 0.22, 0.30, 0.26, 0.12],   // late game — mostly mid/big orbs (harder)
-    rampScore: 650,                               // score at which difficulty ~maxes out
+    weightsLate:[0.16, 0.26, 0.30, 0.20, 0.08],   // late game — more mid orbs
+    rampScore: 900,                               // score at which difficulty ~maxes out
   },
   combo:   { windowFrames:16, maxMult:9 }, // chained merges within window stack a multiplier
-  dropCooldownFrames: 16,
-  overflowGraceFrames: 55,   // frames an orb may sit above the dead line before game over
+  // Reactor: rows of orbs rise from the floor and shove the stack up. This removes
+  // the merge equilibrium — the board fills itself, so you must keep acting.
+  reactor: {
+    firstSurgeFrames: 200,   // ~3.3s before the first surge
+    intervalStart: 204,      // ~3.4s between surges at wave 1
+    intervalMin: 66,         // ~1.1s — fastest
+    perSurgeRamp: 11,        // interval shrinks each surge within a wave
+    perWaveRamp: 12,         // base interval shrinks each new wave
+    rowHeight: 43,           // how far the stack is shoved up per surge (main pressure)
+    surgesPerWave: 5,        // surges to survive before the perk draft
+    tiers: [0,1,0,2,1,0],    // pool of tiers used to build a surge row (mixed)
+  },
+  bomb:    { comboToEarn: 4, radius: 78, maxHeld: 3 }, // earn a Bomb on a 4+ chain
+  dropCooldownFrames: 14,
+  overflowGraceFrames: 70,   // frames an orb may sit above the dead line before game over
   starBonus: 250,
   maxParticles: 260,
   analytics: {
@@ -356,6 +394,39 @@ let comboCount = 0, comboTimer = 0, comboPeak = 0;
 let paused = false;
 let tutorialActive = false, tutorialStep = 0;
 const TUT_KEY = 'orbitmerge.tutorial';
+
+// Reactor (rising surges) + Bomb power
+let surgeTimer = 0, surgeInterval = 0, surgeCount = 0;
+let bombs = 0, bombArmed = false;
+
+// Roguelite run state: waves + drafted perks (mods)
+let wave = 1, surgesThisWave = 0, inDraft = false;
+function freshMods(){
+  return {
+    surgeIntervalMul: 1,                    // ❄️ Coolant
+    bombRadiusMul: 1,                       // 💥 Bigger Bombs
+    bombThreshold: CONFIG.bomb.comboToEarn, // 🎯 Trigger Finger
+    wildChance: 0,                          // 🌈 Wild Spawns
+    scoreMul: 1,                            // 💰 Greed
+    freeBombPerWave: 0,                     // 🧨 Stockpile
+    shieldPerWave: 0, shields: 0,           // 🛡️ Shield
+    cooldownMul: 1,                         // ⚡ Quick Hands
+  };
+}
+let mods = freshMods();
+const takenPerks = [];
+
+// Perk pool (drafted 1-of-3 between waves). Stackable.
+const PERKS = [
+  { id:'coolant', icon:'❄️', name:'Coolant',        desc:'Reactor surges 18% slower',        apply(){ mods.surgeIntervalMul *= 1.18; } },
+  { id:'bigbomb', icon:'💥', name:'Bigger Bombs',   desc:'Bomb blast radius +45%',           apply(){ mods.bombRadiusMul *= 1.45; } },
+  { id:'trigger', icon:'🎯', name:'Trigger Finger', desc:'Earn bombs on shorter chains',     apply(){ mods.bombThreshold = Math.max(2, mods.bombThreshold - 1); } },
+  { id:'wild',    icon:'🌈', name:'Wild Spawns',    desc:'+10% orbs are Wild (match any)',   apply(){ mods.wildChance = Math.min(0.5, mods.wildChance + 0.10); } },
+  { id:'greed',   icon:'💰', name:'Greed',          desc:'+35% score from merges',           apply(){ mods.scoreMul *= 1.35; } },
+  { id:'stock',   icon:'🧨', name:'Stockpile',      desc:'+1 bomb each wave (and now)',       apply(){ mods.freeBombPerWave += 1; bombs = Math.min(CONFIG.bomb.maxHeld, bombs + 1); updateBombUI(); } },
+  { id:'shield',  icon:'🛡️', name:'Shield',         desc:'Survive one overflow per wave',    apply(){ mods.shieldPerWave += 1; mods.shields += 1; } },
+  { id:'haste',   icon:'⚡', name:'Quick Hands',    desc:'Drop orbs ~30% faster',            apply(){ mods.cooldownMul *= 0.7; } },
+];
 let lastGameOverMs = 0, lastScore = 0, lastMaxTier = 0;
 const tms = () => sessionStartMs ? (Date.now() - sessionStartMs) : 0; // ms since game start
 const norm = (v, span) => Math.round((v / span) * 1000) / 1000;
@@ -403,7 +474,7 @@ function makeOrb(x, y, tier){
 }
 
 function newHeld(){
-  held = { tier: nextTier, x: clampDropX(pointerX, nextTier) };
+  held = { tier: nextTier, x: clampDropX(pointerX, nextTier), wild: Math.random() < mods.wildChance };
   nextTier = randSpawnTier();
   updateNextUI();
   dropCooldown = 0;
@@ -437,9 +508,16 @@ function completeTutorial(){
   Analytics.track('tutorial_done', { t: tms() });
 }
 
+// ---------- Bomb power UI ----------
+function updateBombUI(){
+  bombBtn.textContent = '💣' + bombs;
+  bombBtn.disabled = (bombs <= 0);
+  bombBtn.classList.toggle('armed', bombArmed && bombs > 0);
+}
+
 // ---------- Pause ----------
 function setPaused(p){
-  if(!running || gameOver) return;
+  if(!running || gameOver || inDraft) return;
   paused = p;
   pauseScreen.classList.toggle('show', p);
   pauseBtn.textContent = p ? '▶' : '⏸';
@@ -519,13 +597,20 @@ function onMove(e){
 function dropHeld(){
   const o = makeOrb(held.x, DROP_Y, held.tier);
   o.vy = 1.5;
+  if(bombArmed){            // deploy a Bomb instead of a normal orb
+    o.bomb = true; o.r = 20; o.tier = 0;
+    bombArmed = false; bombs = Math.max(0, bombs - 1); updateBombUI();
+    Analytics.track('bomb_drop', { x:norm(o.x, W), t:tms() });
+  } else {
+    o.wild = !!held.wild;   // carry the Wild flag onto the live orb
+    Analytics.track('orb_drop', { x:norm(o.x, W), tier:o.tier, wild:o.wild, orbs:orbs.length, t:tms() });
+  }
   orbs.push(o);
   totalDrops++;
-  Analytics.track('orb_drop', { x:norm(o.x, W), tier:o.tier, next:nextTier, orbs:orbs.length, t:tms() });
   dropSound();
   if(tutorialActive) tutorialAdvance(2);
   held = null;
-  dropCooldown = CONFIG.dropCooldownFrames; // frames before next orb appears
+  dropCooldown = Math.round(CONFIG.dropCooldownFrames * mods.cooldownMul); // frames before next orb
 }
 function onDrop(e){
   if(!running || paused || !held || dropCooldown>0) return;
@@ -599,25 +684,143 @@ function stepPhysics(){
   // array so chain reactions (a fresh merged orb touching another) resolve too.
   for(let i=0;i<orbs.length;i++){
     const a = orbs[i];
-    if(a.dead) continue;
+    if(a.dead || a.bomb) continue;
     for(let j=i+1;j<orbs.length;j++){
       const b = orbs[j];
-      if(b.dead || b.tier !== a.tier) continue;
+      if(b.dead || b.bomb) continue;
+      // same tier merges; a Wild orb matches any neighbour
+      if(b.tier !== a.tier && !a.wild && !b.wild) continue;
       const dx = b.x - a.x, dy = b.y - a.y;
       const minD = a.r + b.r;
       if(dx*dx + dy*dy < minD*minD){
-        mergeOrbs(a, b); // same-tier merge (two Stars annihilate, handled inside)
+        mergeOrbs(a, b); // (Wild + Stars handled inside)
         break; // a is now dead — move on to the next orb
       }
     }
+  }
+  // Bomb pass: a Bomb detonates on contact with the floor or any orb.
+  for(const o of orbs){
+    if(o.dead || !o.bomb) continue;
+    let hit = (o.y + o.r >= FLOOR - 1);
+    if(!hit){
+      for(const p of orbs){
+        if(p === o || p.dead || p.bomb) continue;
+        const dx = p.x - o.x, dy = p.y - o.y, rr = o.r + p.r + 1;
+        if(dx*dx + dy*dy < rr*rr){ hit = true; break; }
+      }
+    }
+    if(hit) explodeBomb(o);
   }
   // remove dead (merged) orbs
   if(orbs.some(o=>o.dead)) orbs = orbs.filter(o=>!o.dead);
 }
 
+function explodeBomb(o){
+  o.dead = true;
+  const R = CONFIG.bomb.radius * mods.bombRadiusMul;
+  let cleared = 0, gain = 0;
+  for(const p of orbs){
+    if(p.dead || p === o) continue;
+    const dx = p.x - o.x, dy = p.y - o.y;
+    if(dx*dx + dy*dy < R*R){ p.dead = true; cleared++; gain += TIERS[p.tier].score; }
+  }
+  if(gain > 0) addScore(gain);
+  burst(o.x, o.y, '#ff7043', 56);
+  spawnRing(o.x, o.y, R*2.4, '#ff7043', 1.3);
+  spawnRing(o.x, o.y, R*1.4, '#ffffff', 1.8);
+  shake = 18;
+  blip(80, 0.25, 'sawtooth', 0.2);
+  if(navigator.vibrate) navigator.vibrate(40);
+  spawnPopup(o.x, o.y - 22, 'BOOM x'+cleared, '#ff7043');
+  Analytics.track('bomb_explode', { cleared, t:tms() });
+}
+
+// ---------- Reactor: a row of orbs rises from the floor, shoving the stack up ----------
+function nextSurgeInterval(){
+  const R = CONFIG.reactor;
+  const base = R.intervalStart - (wave-1)*R.perWaveRamp - surgesThisWave*R.perSurgeRamp;
+  return Math.max(R.intervalMin, Math.round(base * mods.surgeIntervalMul));
+}
+function doSurge(){
+  const R = CONFIG.reactor;
+  for(const o of orbs){ if(o.dead) continue; o.y -= R.rowHeight; if(o.vy > 0) o.vy = 0; }
+  const baseR = TIERS[0].r;
+  const step = baseR * 2.15;
+  let idx = 0;
+  for(let x = LEFT + baseR + 2; x <= RIGHT - baseR; x += step){
+    const tier = R.tiers[(surgeCount*3 + idx) % R.tiers.length];
+    const o = makeOrb(x, FLOOR - TIERS[tier].r, tier);
+    o.spawnT = 0.5; o.vy = 0;
+    orbs.push(o);
+    idx++;
+  }
+  surgeCount++; surgesThisWave++;
+  shake = Math.max(shake, 9);
+  blip(70, 0.18, 'sawtooth', 0.16);
+  spawnPopup(W/2, FLOOR - 34, 'SURGE!', '#ff5d73');
+  if(navigator.vibrate) navigator.vibrate(25);
+  Analytics.track('surge', { n:surgeCount, wave, orbs:orbs.length, t:tms() });
+  if(surgesThisWave >= R.surgesPerWave) completeWave();
+}
+
+// ---------- Waves + perk draft ----------
+function completeWave(){
+  inDraft = true;
+  spawnPopup(W/2, DEAD_LINE + 40, 'WAVE '+wave+' CLEAR!', '#5fd6a6');
+  burst(W/2, DEAD_LINE + 40, '#5fd6a6', 40);
+  blip(523, 0.14, 'triangle', 0.18);
+  setTimeout(()=> blip(784, 0.16, 'triangle', 0.16), 90);
+  Analytics.track('wave_complete', { wave, score, t:tms() });
+  showPerkDraft();
+}
+function showPerkDraft(){
+  // pick 3 distinct perks
+  const pool = PERKS.slice();
+  for(let i=pool.length-1;i>0;i--){ const j = (frameCount + i*7) % (i+1); const tmp=pool[i]; pool[i]=pool[j]; pool[j]=tmp; }
+  const picks = pool.slice(0, 3);
+  perkCards.innerHTML = '';
+  perkWaveLabel.textContent = 'Wave ' + wave + ' cleared — pick a perk';
+  picks.forEach(p => {
+    const card = document.createElement('button');
+    card.className = 'perk-card';
+    card.innerHTML = `<div class="perk-ico">${p.icon}</div><div class="perk-name">${p.name}</div><div class="perk-desc">${p.desc}</div>`;
+    card.addEventListener('click', () => choosePerk(p));
+    perkCards.appendChild(card);
+  });
+  perkScreen.classList.add('show');
+}
+function choosePerk(p){
+  p.apply();
+  takenPerks.push(p.id);
+  Analytics.track('perk_pick', { perk:p.id, wave, t:tms() });
+  perkScreen.classList.remove('show');
+  // start next wave
+  wave++; surgesThisWave = 0;
+  if(mods.shieldPerWave > 0) mods.shields = mods.shieldPerWave; // refill shields each wave
+  if(mods.freeBombPerWave > 0){ bombs = Math.min(CONFIG.bomb.maxHeld, bombs + mods.freeBombPerWave); updateBombUI(); }
+  surgeInterval = nextSurgeInterval();
+  surgeTimer = Math.max(surgeInterval, 120); // small breather after a wave
+  updateWaveUI();
+  inDraft = false;
+}
+function activateShield(){
+  mods.shields--;
+  let cleared = 0;
+  for(const o of orbs){ if(o.dead) continue; if(o.y - o.r < DEAD_LINE + 30){ o.dead = true; cleared++; } }
+  burst(W/2, DEAD_LINE, '#52c7ff', 60);
+  spawnRing(W/2, DEAD_LINE+20, 420, '#52c7ff', 1.0);
+  spawnPopup(W/2, DEAD_LINE + 20, 'SHIELD! cleared '+cleared, '#52c7ff');
+  shake = 16; blip(660, 0.2, 'sine', 0.18);
+  if(navigator.vibrate) navigator.vibrate([20,30,20]);
+  Analytics.track('shield', { cleared, wave, t:tms() });
+}
+
 function mergeOrbs(a, b){
   a.dead = true; b.dead = true;
   const mx = (a.x+b.x)/2, my = (a.y+b.y)/2;
+
+  // effective tier — a Wild orb takes its partner's tier (so it bumps up correctly)
+  const baseTier = (a.wild && !b.wild) ? b.tier : (b.wild && !a.wild) ? a.tier : Math.max(a.tier, b.tier);
 
   // combo applies to every merge
   comboCount = comboTimer > 0 ? comboCount + 1 : 1;
@@ -626,10 +829,16 @@ function mergeOrbs(a, b){
   const mult = Math.min(comboCount, CONFIG.combo.maxMult);
   totalMerges++;
 
+  // earn a Bomb when a chain reaches the (perk-modified) threshold length
+  if(comboCount === mods.bombThreshold && bombs < CONFIG.bomb.maxHeld){
+    bombs++; updateBombUI();
+    spawnPopup(mx, my - 42, '💣 BOMB!', '#ff7043');
+  }
+
   // Two Stars annihilate for a huge bonus (no board clear). This is the ultimate
   // goal — but it does NOT free the jar, so Stars still apply pressure (no exploit).
-  if(a.tier === MAX_TIER){
-    const bonus = CONFIG.starBonus * 4 * mult;
+  if(baseTier === MAX_TIER){
+    const bonus = Math.round(CONFIG.starBonus * 4 * mult * mods.scoreMul);
     addScore(bonus);
     spawnPopup(mx, my - 40, '★★ +'+bonus, '#fff1a8');
     burst(mx, my, '#fff1a8', 80);
@@ -640,14 +849,14 @@ function mergeOrbs(a, b){
     return;
   }
 
-  const nt = a.tier + 1;
+  const nt = baseTier + 1;
   const merged = makeOrb(mx, my, nt);
   merged.vx = (a.vx+b.vx)/2;
   merged.vy = (a.vy+b.vy)/2 - 1.2;
   merged.spawnT = 1;
   orbs.push(merged);
 
-  const gain = TIERS[nt].score * mult;
+  const gain = Math.round(TIERS[nt].score * mult * mods.scoreMul);
   addScore(gain);
   Analytics.track('merge', { from:a.tier, to:nt, x:norm(mx, W), y:norm(my, H), combo:comboCount, orbs:orbs.length, t:tms() });
 
@@ -664,8 +873,9 @@ function mergeOrbs(a, b){
   if(nt === MAX_TIER){
     // Forged a Star — celebration + bonus, but it STAYS on the board (no detonation),
     // so big orbs keep accumulating and overflow stays a real threat.
-    addScore(CONFIG.starBonus);
-    spawnPopup(mx, my - merged.r - 18, 'STAR! +'+CONFIG.starBonus, '#fff1a8');
+    const sb = Math.round(CONFIG.starBonus * mods.scoreMul);
+    addScore(sb);
+    spawnPopup(mx, my - merged.r - 18, 'STAR! +'+sb, '#fff1a8');
     burst(mx, my, '#fff1a8', 50);
     spawnRing(mx, my, 260, '#fff1a8', 1.5);
     shake = 20; starStinger();
@@ -736,7 +946,7 @@ function addScore(n){
 function checkOverflow(){
   let over = false;
   for(const o of orbs){
-    if(o.dead) continue;
+    if(o.dead || o.bomb) continue;
     // Count an orb toward overflow once its spawn pop is done and its top has
     // pushed above the dead line, as long as it isn't shooting upward (a bounce).
     // No strict "fully stopped" gate — that made game-over practically unreachable.
@@ -751,7 +961,10 @@ function checkOverflow(){
       blip(150, 0.12, 'triangle', 0.14);
       if(navigator.vibrate) navigator.vibrate(30);
     }
-    if(overflowTimer > CONFIG.overflowGraceFrames) endGame(); // ~1.5s grace before overflow
+    if(overflowTimer > CONFIG.overflowGraceFrames){
+      if(mods.shields > 0){ activateShield(); overflowTimer = 0; } // Shield perk saves you
+      else endGame();
+    }
   } else {
     overflowTimer = Math.max(0, overflowTimer - 1);
   }
@@ -762,10 +975,9 @@ function endGame(){
   gameOver = true;
   running = false;
   finalEl.textContent = score;
-  let msg = 'Nice run!';
-  if(highestTier >= MAX_TIER) msg = 'You forged the Star — legendary!';
-  else if(highestTier >= 7) msg = 'So close to the Star. Go again!';
-  else if(score >= best && score>0) msg = 'New personal best! 🎉';
+  let msg = 'Reactor overload at Wave ' + wave + '!';
+  if(score >= best && score>0) msg = '🎉 New best — Wave ' + wave + '!';
+  else if(wave >= 8) msg = 'Wave ' + wave + ' — reactor master!';
   overMsg.textContent = msg;
   overScreen.classList.add('show');
   pauseBtn.disabled = true; restartBtn.disabled = false;
@@ -773,8 +985,8 @@ function endGame(){
   if(navigator.vibrate) navigator.vibrate([40,40,80]);
 
   Analytics.track('game_over', {
-    score, max_tier:highestTier, duration_sec:Math.round(tms()/100)/10,
-    orbs:orbs.length, drops:totalDrops, merges:totalMerges, is_best: score>=best,
+    score, wave, max_tier:highestTier, duration_sec:Math.round(tms()/100)/10,
+    orbs:orbs.length, drops:totalDrops, merges:totalMerges, perks:takenPerks.slice(), is_best: score>=best,
   });
   Analytics.flush();
   lastGameOverMs = Date.now(); lastScore = score; lastMaxTier = highestTier;
@@ -842,6 +1054,42 @@ function drawStar(cx,cy,R,color){
   }
   ctx.closePath(); ctx.fill();
 }
+function drawBomb(x,y,r){
+  ctx.save();
+  ctx.shadowColor = '#ff7043'; ctx.shadowBlur = 14;
+  ctx.fillStyle = '#1c1c22';
+  ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = 'rgba(255,255,255,.25)';
+  ctx.beginPath(); ctx.arc(x - r*0.32, y - r*0.34, r*0.24, 0, Math.PI*2); ctx.fill();
+  // pulsing fuse spark
+  const s = 2 + Math.abs(Math.sin(frameCount*0.3))*2.5;
+  ctx.fillStyle = '#ffd45e'; ctx.shadowColor = '#ffae3c'; ctx.shadowBlur = 8;
+  ctx.beginPath(); ctx.arc(x, y - r - 2, s, 0, Math.PI*2); ctx.fill();
+  ctx.restore();
+}
+function drawWild(x,y,r){
+  ctx.save();
+  ctx.shadowColor = '#ffffff'; ctx.shadowBlur = 16;
+  let g;
+  if(ctx.createConicGradient){
+    g = ctx.createConicGradient(frameCount*0.04, x, y);
+    for(let i=0;i<=6;i++) g.addColorStop(i/6, `hsl(${(i*60)%360},90%,62%)`);
+  } else {
+    g = ctx.createRadialGradient(x - r*0.3, y - r*0.3, r*0.1, x, y, r);
+    g.addColorStop(0, '#ffffff'); g.addColorStop(1, '#a06bff');
+  }
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = 'rgba(255,255,255,.9)';
+  ctx.beginPath(); ctx.arc(x - r*0.3, y - r*0.34, r*0.2, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,.95)';
+  ctx.font = '800 '+Math.max(10, Math.round(r*0.7))+'px system-ui'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText('✦', x, y);
+  ctx.restore();
+}
+function updateWaveUI(){ /* wave is drawn on the in-canvas HUD */ }
 
 function render(){
   ctx.clearRect(0,0,W,H);
@@ -866,10 +1114,25 @@ function render(){
   ctx.beginPath(); ctx.moveTo(LEFT, DEAD_LINE); ctx.lineTo(RIGHT, DEAD_LINE); ctx.stroke();
   ctx.setLineDash([]);
 
-  // orbs
+  // surge countdown bar (tension builds as the next Reactor surge approaches)
+  if(running && surgeInterval > 0){
+    const frac = Math.min(1, 1 - Math.max(0, surgeTimer) / surgeInterval);
+    ctx.fillStyle = 'rgba(255,93,115,.18)'; ctx.fillRect(LEFT, DEAD_LINE-12, RIGHT-LEFT, 4);
+    ctx.fillStyle = frac > 0.8 ? '#ff5d73' : 'rgba(255,93,115,.7)';
+    ctx.fillRect(LEFT, DEAD_LINE-12, (RIGHT-LEFT)*frac, 4);
+  }
+
+  // wave + shield label
+  ctx.fillStyle = 'rgba(255,255,255,.55)'; ctx.font = '700 11px system-ui'; ctx.textAlign = 'left';
+  ctx.fillText('WAVE ' + wave, LEFT, DEAD_LINE - 18);
+  if(mods.shields > 0){ ctx.textAlign = 'right'; ctx.fillStyle = '#52c7ff'; ctx.fillText('🛡'.repeat(mods.shields), RIGHT, DEAD_LINE - 18); }
+
+  // orbs (bombs and wilds render distinctly)
   for(const o of orbs){
     const pop = o.spawnT>0 ? (1 + 0.25*Math.sin((1-o.spawnT)*Math.PI)) : 1;
-    drawOrb(o.x, o.y, o.r*pop, o.tier);
+    if(o.bomb) drawBomb(o.x, o.y, o.r*pop);
+    else if(o.wild) drawWild(o.x, o.y, o.r*pop);
+    else drawOrb(o.x, o.y, o.r*pop, o.tier);
   }
 
   // shockwave / flash rings + particles, drawn additively so glow stacks
@@ -916,9 +1179,11 @@ function render(){
     ctx.strokeStyle = t.color; ctx.lineWidth = 2; ctx.setLineDash([5,6]);
     ctx.beginPath(); ctx.arc(lx, ghostY, t.r, 0, Math.PI*2); ctx.stroke();
     ctx.setLineDash([]); ctx.globalAlpha = 1;
-    // held orb
+    // held orb (or a Bomb when armed, or a Wild)
     const bob = Math.sin(frameCount*0.1)*2;
-    drawOrb(lx, DROP_Y + bob, t.r, held.tier);
+    if(bombArmed && bombs > 0) drawBomb(lx, DROP_Y + bob, 20);
+    else if(held.wild) drawWild(lx, DROP_Y + bob, t.r);
+    else drawOrb(lx, DROP_Y + bob, t.r, held.tier);
   }
 
   // popups
@@ -964,8 +1229,14 @@ function loop(ts){
   acc += dtMs;
   while(acc >= DT){
     frameCount++;
-    if(running && !paused){
+    if(running && !paused && !inDraft){
       if(dropCooldown>0){ dropCooldown--; if(dropCooldown===0 && !held) newHeld(); }
+      // Reactor surge: rises on a timer that accelerates within and across waves
+      surgeTimer--;
+      if(surgeTimer <= 0){
+        doSurge();
+        if(!inDraft){ surgeInterval = nextSurgeInterval(); surgeTimer = surgeInterval; }
+      }
       stepPhysics();
       updateCombo();
       checkOverflow();
@@ -991,6 +1262,16 @@ function startGame(){
   pauseScreen.classList.remove('show');
   paused = false; pauseBtn.textContent = '⏸';
   pauseBtn.disabled = false; restartBtn.disabled = false;
+
+  // Reactor + roguelite reset
+  surgeTimer = CONFIG.reactor.firstSurgeFrames;
+  surgeInterval = CONFIG.reactor.intervalStart;
+  surgeCount = 0;
+  wave = 1; surgesThisWave = 0; inDraft = false;
+  mods = freshMods(); takenPerks.length = 0;
+  perkScreen.classList.remove('show');
+  bombs = 0; bombArmed = false; updateBombUI();
+  updateWaveUI();
 
   // first-run tutorial
   tutorialActive = (storeGet(TUT_KEY) !== 'done');
@@ -1018,6 +1299,11 @@ resumeBtn.addEventListener('click', () => setPaused(false));
 restartBtn.addEventListener('click', startGame);
 restartBtn2.addEventListener('click', startGame);
 coachSkip.addEventListener('click', completeTutorial);
+bombBtn.addEventListener('click', () => {
+  if(!running || paused || bombs <= 0) return;
+  bombArmed = !bombArmed;          // arm/disarm; the next drop becomes a Bomb
+  updateBombUI();
+});
 
 // keyboard: space/click to drop, arrows to nudge, P/Esc to pause
 window.addEventListener('keydown', (e)=>{
@@ -1034,7 +1320,7 @@ window.addEventListener('keydown', (e)=>{
 // Expose config + analytics for inspection/tuning (e.g. window.OrbitMerge.analytics.log())
 window.OrbitMerge = {
   config: CONFIG, analytics: Analytics,
-  state: () => ({ running, paused, gameOver, orbs: orbs.length, score, tutorialActive, tutorialStep }),
+  state: () => ({ running, paused, gameOver, orbs: orbs.length, score, tutorialActive, tutorialStep, surgeCount, surgeInterval, bombs, bombArmed, wave, surgesThisWave, inDraft, perks: takenPerks.slice() }),
 };
 
 fitCanvas();
