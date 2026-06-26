@@ -152,8 +152,20 @@ const startScreen = document.getElementById('startScreen');
 const overScreen  = document.getElementById('overScreen');
 const soundBtn = document.getElementById('soundBtn');
 
+// Safe localStorage wrappers — Private Mode / locked-down WebViews throw on
+// access, which would otherwise crash the whole game at startup.
+const mem = {};
+function storeGet(key){
+  try { const v = localStorage.getItem(key); return v === null ? (key in mem ? mem[key] : null) : v; }
+  catch(e){ return key in mem ? mem[key] : null; }
+}
+function storeSet(key, val){
+  mem[key] = val;
+  try { localStorage.setItem(key, val); } catch(e){ /* fall back to in-memory */ }
+}
+
 const BEST_KEY = 'orbitmerge.best';
-let best = parseInt(localStorage.getItem(BEST_KEY) || '0', 10) || 0;
+let best = parseInt(storeGet(BEST_KEY) || '0', 10) || 0;
 bestEl.textContent = best;
 
 // ---------- Responsive sizing ----------
@@ -224,7 +236,7 @@ let highestTier = 0;
 const GRAV = 0.42;
 const REST = 0.12;       // restitution (bounciness)
 const FRICTION = 0.985;
-const SUBSTEPS = 4;
+const SUBSTEPS = 8;      // position-solver iterations per frame (higher = firmer stacks)
 
 // Held / next orb
 let held = null;         // {tier, x}
@@ -255,18 +267,19 @@ function makeOrb(x, y, tier){
 }
 
 function newHeld(){
-  held = { tier: nextTier, x: clampDropX(pointerX) };
+  held = { tier: nextTier, x: clampDropX(pointerX, nextTier) };
   nextTier = randSpawnTier();
   dropCooldown = 0;
 }
 
-function clampDropX(x){
-  const r = TIERS[held ? held.tier : 0].r;
+// Clamp the drop X so an orb of the given tier stays fully inside the walls.
+function clampDropX(x, tier){
+  const r = TIERS[tier].r;
   return Math.max(LEFT + r, Math.min(RIGHT - r, x));
 }
 
 // ---------- Sound (WebAudio, no assets) ----------
-let audioOn = (localStorage.getItem('orbitmerge.sound') !== 'off');
+let audioOn = (storeGet('orbitmerge.sound') !== 'off');
 let actx = null;
 soundBtn.textContent = audioOn ? '🔊' : '🔇';
 function ensureAudio(){ if(!actx){ try{ actx = new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} } }
@@ -292,7 +305,7 @@ function dropSound(){ blip(180, 0.06, 'sine', 0.12); }
 soundBtn.addEventListener('click', () => {
   audioOn = !audioOn;
   soundBtn.textContent = audioOn ? '🔊' : '🔇';
-  localStorage.setItem('orbitmerge.sound', audioOn ? 'on' : 'off');
+  storeSet('orbitmerge.sound', audioOn ? 'on' : 'off');
   if(audioOn){ ensureAudio(); blip(440,0.08,'sine',0.15); }
 });
 
@@ -306,7 +319,7 @@ function onMove(e){
   if(!running) return;
   pointerX = pointerPos(e);
   pointerActive = true;
-  if(held) held.x = clampDropX(pointerX);
+  if(held) held.x = clampDropX(pointerX, held.tier);
   e.preventDefault();
 }
 function onDrop(e){
@@ -331,53 +344,71 @@ canvas.addEventListener('touchend', onDrop, {passive:false});
 // ---------- Physics ----------
 function stepPhysics(){
   const n = orbs.length;
-  // integrate
+  // integrate (skip dead orbs)
   for(let i=0;i<n;i++){
     const o = orbs[i];
+    if(o.dead) continue;
     if(o.spawnT>0) o.spawnT = Math.max(0, o.spawnT - 0.08);
     o.vy += GRAV;
     o.vx *= FRICTION;
     o.x += o.vx;
     o.y += o.vy;
   }
+  // Position solver: separate overlaps and clamp to walls, several iterations
+  // so stacks stay firm and actually grow upward instead of compacting.
   for(let s=0;s<SUBSTEPS;s++){
-    // walls / floor
-    for(let i=0;i<n;i++){
-      const o = orbs[i];
-      if(o.x - o.r < LEFT){ o.x = LEFT + o.r; o.vx = -o.vx*REST; }
-      if(o.x + o.r > RIGHT){ o.x = RIGHT - o.r; o.vx = -o.vx*REST; }
-      if(o.y + o.r > FLOOR){ o.y = FLOOR - o.r; o.vy = -o.vy*REST; o.vx *= 0.92; }
-    }
-    // pairwise collisions
+    // pairwise separation (no merging here — merges are resolved once per frame)
     for(let i=0;i<n;i++){
       const a = orbs[i];
       if(a.dead) continue;
       for(let j=i+1;j<n;j++){
         const b = orbs[j];
         if(b.dead) continue;
-        let dx = b.x - a.x, dy = b.y - a.y;
-        let dist = Math.hypot(dx,dy);
+        const dx = b.x - a.x, dy = b.y - a.y;
         const minD = a.r + b.r;
-        if(dist < minD && dist > 0.0001){
-          // merge check
-          if(a.tier === b.tier && !a.merging && !b.merging && a.tier < MAX_TIER){
-            mergeOrbs(a,b);
-            continue;
-          }
+        const distSq = dx*dx + dy*dy;
+        if(distSq < minD*minD && distSq > 0.0001){
+          const dist = Math.sqrt(distSq);
           const overlap = (minD - dist);
           const nx = dx/dist, ny = dy/dist;
           const push = overlap/2;
           a.x -= nx*push; a.y -= ny*push;
           b.x += nx*push; b.y += ny*push;
-          // relative velocity along normal
-          const rvx = b.vx - a.vx, rvy = b.vy - a.vy;
-          const vn = rvx*nx + rvy*ny;
-          if(vn < 0){
-            const imp = -(1+REST)*vn/2;
-            a.vx -= imp*nx; a.vy -= imp*ny;
-            b.vx += imp*nx; b.vy += imp*ny;
+          // velocity response only on the first iteration (avoids energy build-up)
+          if(s===0){
+            const rvx = b.vx - a.vx, rvy = b.vy - a.vy;
+            const vn = rvx*nx + rvy*ny;
+            if(vn < 0){
+              const imp = -(1+REST)*vn/2;
+              a.vx -= imp*nx; a.vy -= imp*ny;
+              b.vx += imp*nx; b.vy += imp*ny;
+            }
           }
         }
+      }
+    }
+    // walls / floor applied AFTER separation each iteration, so the jar always wins
+    for(let i=0;i<n;i++){
+      const o = orbs[i];
+      if(o.dead) continue;
+      if(o.x - o.r < LEFT){ o.x = LEFT + o.r; if(s===0) o.vx = -o.vx*REST; }
+      if(o.x + o.r > RIGHT){ o.x = RIGHT - o.r; if(s===0) o.vx = -o.vx*REST; }
+      if(o.y + o.r > FLOOR){ o.y = FLOOR - o.r; if(s===0){ o.vy = -o.vy*REST; o.vx *= 0.92; } }
+    }
+  }
+  // Merge pass: merge touching same-tier orbs once per frame. Iterates the live
+  // array so chain reactions (a fresh merged orb touching another) resolve too.
+  for(let i=0;i<orbs.length;i++){
+    const a = orbs[i];
+    if(a.dead || a.tier >= MAX_TIER) continue;
+    for(let j=i+1;j<orbs.length;j++){
+      const b = orbs[j];
+      if(b.dead || b.tier !== a.tier) continue;
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const minD = a.r + b.r;
+      if(dx*dx + dy*dy < minD*minD){
+        mergeOrbs(a, b);
+        break; // a is now dead — move on to the next orb
       }
     }
   }
@@ -415,12 +446,16 @@ function mergeOrbs(a, b){
 }
 
 // ---------- Effects ----------
+const MAX_PARTICLES = 260;   // hard cap so chained merges can't flood the canvas
 function burst(x,y,color,count){
   for(let i=0;i<count;i++){
     const a = Math.random()*Math.PI*2;
     const sp = 1.5 + Math.random()*4.5;
     particles.push({ x,y, vx:Math.cos(a)*sp, vy:Math.sin(a)*sp - 1,
       life:1, color, r: 1.5 + Math.random()*2.5 });
+  }
+  if(particles.length > MAX_PARTICLES){
+    particles.splice(0, particles.length - MAX_PARTICLES); // drop oldest
   }
 }
 function spawnPopup(x,y,text,color){
@@ -443,7 +478,7 @@ function addScore(n){
   scoreEl.textContent = score;
   if(score > best){
     best = score; bestEl.textContent = best;
-    localStorage.setItem(BEST_KEY, String(best));
+    storeSet(BEST_KEY, String(best));
   }
 }
 
@@ -451,16 +486,19 @@ function addScore(n){
 function checkOverflow(){
   let over = false;
   for(const o of orbs){
-    // an orb counts toward overflow only when it's settled (slow) above the dead line
-    if(o.spawnT<=0 && o.y - o.r < DEAD_LINE && Math.abs(o.vy) < 0.6){
+    if(o.dead) continue;
+    // Count an orb toward overflow once its spawn pop is done and its top has
+    // pushed above the dead line, as long as it isn't shooting upward (a bounce).
+    // No strict "fully stopped" gate — that made game-over practically unreachable.
+    if(o.spawnT<=0 && o.y - o.r < DEAD_LINE && o.vy > -1.5){
       over = true; break;
     }
   }
   if(over){
     overflowTimer++;
-    if(overflowTimer > 70) endGame();
+    if(overflowTimer > 90) endGame();   // ~1.5s of grace before the jar overflows
   } else {
-    overflowTimer = Math.max(0, overflowTimer - 2);
+    overflowTimer = Math.max(0, overflowTimer - 1);
   }
 }
 
@@ -634,8 +672,8 @@ document.getElementById('againBtn').addEventListener('click', startGame);
 // keyboard: space/click to drop, arrows to nudge
 window.addEventListener('keydown', (e)=>{
   if(!running) { if(e.code==='Space'||e.code==='Enter'){ startGame(); } return; }
-  if(e.code==='ArrowLeft'){ pointerX -= 18; if(held) held.x = clampDropX(pointerX); }
-  if(e.code==='ArrowRight'){ pointerX += 18; if(held) held.x = clampDropX(pointerX); }
+  if(e.code==='ArrowLeft'){ pointerX -= 18; if(held) held.x = clampDropX(pointerX, held.tier); }
+  if(e.code==='ArrowRight'){ pointerX += 18; if(held) held.x = clampDropX(pointerX, held.tier); }
   if(e.code==='Space' && held && dropCooldown<=0){
     const o = makeOrb(held.x, DROP_Y, held.tier); o.vy=1.5; orbs.push(o);
     dropSound(); held=null; dropCooldown=16; e.preventDefault();
