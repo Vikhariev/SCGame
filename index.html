@@ -1,0 +1,650 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<meta name="theme-color" content="#0f1020" />
+<title>Orbit Merge — drop, merge, glow</title>
+<style>
+  :root{
+    --bg0:#0b0c1d; --bg1:#15173a; --ink:#eef1ff; --muted:#9aa0d4;
+    --accent:#ffd45e; --danger:#ff5d73;
+  }
+  *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body{ margin:0; height:100%; }
+  body{
+    font-family:"Segoe UI", system-ui, -apple-system, Roboto, Helvetica, Arial, sans-serif;
+    color:var(--ink);
+    background:
+      radial-gradient(1200px 700px at 50% -10%, #25275e 0%, transparent 60%),
+      radial-gradient(900px 600px at 10% 110%, #1a1c45 0%, transparent 60%),
+      linear-gradient(180deg, var(--bg0), #060713);
+    background-attachment:fixed;
+    overflow:hidden;
+    touch-action:none;
+    user-select:none;
+  }
+  #app{
+    position:fixed; inset:0; display:flex; flex-direction:column;
+    align-items:center; justify-content:flex-start; gap:10px; padding:10px;
+  }
+  header{
+    width:100%; max-width:520px; display:flex; align-items:center;
+    justify-content:space-between; gap:12px; margin-top:4px;
+  }
+  .brand{ display:flex; align-items:center; gap:10px; }
+  .brand .logo{
+    width:34px; height:34px; border-radius:50%;
+    background:radial-gradient(circle at 35% 30%, #fff7d6, #ffb43d 55%, #d4720e 100%);
+    box-shadow:0 0 18px rgba(255,180,61,.6);
+  }
+  .brand h1{ font-size:19px; margin:0; letter-spacing:.5px; font-weight:800; }
+  .brand small{ display:block; font-size:10px; color:var(--muted); letter-spacing:2px; text-transform:uppercase; }
+  .scores{ display:flex; gap:8px; }
+  .pill{
+    background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.08);
+    border-radius:14px; padding:6px 12px; min-width:74px; text-align:center;
+    backdrop-filter:blur(6px);
+  }
+  .pill .label{ font-size:9px; color:var(--muted); letter-spacing:2px; text-transform:uppercase; }
+  .pill .val{ font-size:20px; font-weight:800; line-height:1.1; }
+  .pill.best .val{ color:var(--accent); }
+
+  .stage{ position:relative; }
+  canvas{
+    display:block; border-radius:22px;
+    background:linear-gradient(180deg, rgba(255,255,255,.04), rgba(0,0,0,.18));
+    box-shadow:0 24px 60px rgba(0,0,0,.55), inset 0 0 0 1px rgba(255,255,255,.06);
+    touch-action:none;
+  }
+  .hint{ font-size:12px; color:var(--muted); margin-top:2px; }
+
+  /* Overlays */
+  .overlay{
+    position:absolute; inset:0; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; gap:14px; text-align:center;
+    background:radial-gradient(closest-side, rgba(10,11,29,.78), rgba(6,7,19,.92));
+    border-radius:22px; backdrop-filter:blur(4px);
+    opacity:0; pointer-events:none; transition:opacity .35s ease;
+    padding:24px;
+  }
+  .overlay.show{ opacity:1; pointer-events:auto; }
+  .overlay h2{ margin:0; font-size:30px; }
+  .overlay p{ margin:0; color:var(--muted); max-width:300px; line-height:1.5; }
+  .bigscore{ font-size:46px; font-weight:900; color:var(--accent); text-shadow:0 0 24px rgba(255,212,94,.5); }
+  button.cta{
+    border:none; cursor:pointer; font-weight:800; font-size:16px; letter-spacing:.5px;
+    color:#1a1300; padding:14px 26px; border-radius:16px;
+    background:linear-gradient(180deg,#ffe48a,#ffc23d);
+    box-shadow:0 10px 24px rgba(255,180,61,.4), inset 0 1px 0 rgba(255,255,255,.6);
+    transition:transform .08s ease, filter .2s ease;
+  }
+  button.cta:active{ transform:translateY(2px) scale(.98); }
+  .ghost{
+    background:rgba(255,255,255,.08); color:var(--ink);
+    border:1px solid rgba(255,255,255,.12);
+    border-radius:12px; padding:9px 16px; cursor:pointer; font-weight:700; font-size:13px;
+  }
+  .row{ display:flex; gap:10px; align-items:center; }
+  .merge-chain{ display:flex; gap:6px; align-items:center; flex-wrap:wrap; justify-content:center; margin-top:4px; }
+  .chip{ width:22px; height:22px; border-radius:50%; box-shadow:0 0 10px rgba(0,0,0,.3) inset; }
+  footer{ font-size:11px; color:var(--muted); opacity:.7; margin-top:auto; padding-bottom:4px; }
+  .iconbtn{
+    width:38px;height:38px;border-radius:12px;display:flex;align-items:center;justify-content:center;
+    background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);cursor:pointer;font-size:17px;
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="brand">
+      <div class="logo"></div>
+      <div>
+        <h1>Orbit Merge</h1>
+        <small>drop · merge · glow</small>
+      </div>
+    </div>
+    <div class="row">
+      <div class="scores">
+        <div class="pill"><div class="label">Score</div><div class="val" id="score">0</div></div>
+        <div class="pill best"><div class="label">Best</div><div class="val" id="best">0</div></div>
+      </div>
+      <div class="iconbtn" id="soundBtn" title="Sound">🔊</div>
+    </div>
+  </header>
+
+  <div class="stage">
+    <canvas id="game" width="440" height="560"></canvas>
+
+    <div class="overlay show" id="startScreen">
+      <h2>Orbit Merge</h2>
+      <p>Drop glowing orbs. Two of the same <b>merge</b> into a bigger one. Chain them up — but don't let the jar overflow!</p>
+      <div class="merge-chain" id="chainPreview"></div>
+      <button class="cta" id="playBtn">Play</button>
+      <p style="font-size:11px">Move with mouse / finger · release to drop</p>
+    </div>
+
+    <div class="overlay" id="overScreen">
+      <h2 style="color:var(--danger)">Jar Overflow!</h2>
+      <div class="bigscore" id="finalScore">0</div>
+      <p id="overMsg">Nice run.</p>
+      <button class="cta" id="againBtn">Play again</button>
+    </div>
+  </div>
+
+  <div class="hint">Tip: keep small orbs near the top, build big ones at the bottom.</div>
+  <footer>Made with ♥ — a juicy casual merge game.</footer>
+</div>
+
+<script>
+(() => {
+"use strict";
+
+// ---------- Setup & DOM ----------
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const scoreEl = document.getElementById('score');
+const bestEl  = document.getElementById('best');
+const finalEl = document.getElementById('finalScore');
+const overMsg = document.getElementById('overMsg');
+const startScreen = document.getElementById('startScreen');
+const overScreen  = document.getElementById('overScreen');
+const soundBtn = document.getElementById('soundBtn');
+
+const BEST_KEY = 'orbitmerge.best';
+let best = parseInt(localStorage.getItem(BEST_KEY) || '0', 10) || 0;
+bestEl.textContent = best;
+
+// ---------- Responsive sizing ----------
+const BASE_W = 440, BASE_H = 560;
+function fitCanvas(){
+  const maxW = Math.min(520, window.innerWidth - 20);
+  const maxH = window.innerHeight - 200;
+  let w = maxW;
+  let h = w * (BASE_H/BASE_W);
+  if (h > maxH){ h = maxH; w = h * (BASE_W/BASE_H); }
+  canvas.style.width = w + 'px';
+  canvas.style.height = h + 'px';
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = Math.round(BASE_W * dpr);
+  canvas.height = Math.round(BASE_H * dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+}
+window.addEventListener('resize', fitCanvas);
+
+// World is always reasoned about in BASE_W x BASE_H units.
+const W = BASE_W, H = BASE_H;
+const WALL = 10;            // inner wall thickness
+const FLOOR = H - 14;       // floor y
+const LEFT = WALL, RIGHT = W - WALL;
+const DROP_Y = 64;          // y where the held orb sits
+const DEAD_LINE = 96;       // overflow line
+
+// ---------- Orb tiers ----------
+// radius grows with tier; colors form a pleasant rainbow→gold ramp
+const TIERS = [
+  { r:14, color:'#ff7a9c', glow:'#ff4d78', score:1 },
+  { r:18, color:'#ff9f68', glow:'#ff7a3c', score:3 },
+  { r:23, color:'#ffd45e', glow:'#ffbe2e', score:6 },
+  { r:29, color:'#b6e06b', glow:'#8fd13f', score:10 },
+  { r:35, color:'#5fd6a6', glow:'#2fc488', score:16 },
+  { r:42, color:'#52c7ff', glow:'#1ea7ff', score:24 },
+  { r:50, color:'#7c8bff', glow:'#5566ff', score:34 },
+  { r:58, color:'#b886ff', glow:'#9a55ff', score:48 },
+  { r:67, color:'#ff7ad9', glow:'#ff3dc0', score:66 },
+  { r:77, color:'#fff1a8', glow:'#ffd84d', score:90 }, // top tier — "Star"
+];
+const MAX_TIER = TIERS.length - 1;
+// Only the first few tiers can be dropped from the top.
+const SPAWN_MAX = 4;
+
+// Build the chain preview chips
+const chainPreview = document.getElementById('chainPreview');
+TIERS.forEach((t,i) => {
+  const c = document.createElement('div');
+  c.className = 'chip';
+  c.style.background = `radial-gradient(circle at 35% 30%, #ffffff88, ${t.color} 55%, ${t.glow} 100%)`;
+  c.style.width = c.style.height = Math.max(12, 12 + i*1.6) + 'px';
+  chainPreview.appendChild(c);
+});
+
+// ---------- Game state ----------
+let orbs = [];
+let particles = [];
+let popups = [];        // floating score text
+let score = 0;
+let running = false;
+let gameOver = false;
+let shake = 0;
+let overflowTimer = 0;
+let frameCount = 0;
+let highestTier = 0;
+
+const GRAV = 0.42;
+const REST = 0.12;       // restitution (bounciness)
+const FRICTION = 0.985;
+const SUBSTEPS = 4;
+
+// Held / next orb
+let held = null;         // {tier, x}
+let nextTier = randSpawnTier();
+let dropCooldown = 0;
+
+let pointerX = W/2;
+let pointerActive = false;
+
+function randSpawnTier(){
+  // weight toward smaller tiers
+  const r = Math.random();
+  if (r < 0.5) return 0;
+  if (r < 0.8) return 1;
+  if (r < 0.94) return 2;
+  return Math.min(3, SPAWN_MAX-1);
+}
+
+let orbId = 1;
+function makeOrb(x, y, tier){
+  const t = TIERS[tier];
+  return {
+    id: orbId++, x, y, px:x, py:y, vx:0, vy:0,
+    r: t.r, tier, sleeping:false,
+    merging:false, spawnT: 1, // spawn pop animation
+    wob: Math.random()*Math.PI*2,
+  };
+}
+
+function newHeld(){
+  held = { tier: nextTier, x: clampDropX(pointerX) };
+  nextTier = randSpawnTier();
+  dropCooldown = 0;
+}
+
+function clampDropX(x){
+  const r = TIERS[held ? held.tier : 0].r;
+  return Math.max(LEFT + r, Math.min(RIGHT - r, x));
+}
+
+// ---------- Sound (WebAudio, no assets) ----------
+let audioOn = (localStorage.getItem('orbitmerge.sound') !== 'off');
+let actx = null;
+soundBtn.textContent = audioOn ? '🔊' : '🔇';
+function ensureAudio(){ if(!actx){ try{ actx = new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} } }
+function blip(freq, dur=0.08, type='sine', vol=0.18){
+  if(!audioOn || !actx) return;
+  const t = actx.currentTime;
+  const o = actx.createOscillator();
+  const g = actx.createGain();
+  o.type = type; o.frequency.setValueAtTime(freq, t);
+  o.frequency.exponentialRampToValueAtTime(freq*1.6, t+dur);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(vol, t+0.01);
+  g.gain.exponentialRampToValueAtTime(0.0001, t+dur);
+  o.connect(g).connect(actx.destination);
+  o.start(t); o.stop(t+dur+0.02);
+}
+function mergeSound(tier){
+  const base = 240 + tier*70;
+  blip(base, 0.10, 'triangle', 0.2);
+  setTimeout(()=>blip(base*1.5, 0.09, 'sine', 0.14), 35);
+}
+function dropSound(){ blip(180, 0.06, 'sine', 0.12); }
+soundBtn.addEventListener('click', () => {
+  audioOn = !audioOn;
+  soundBtn.textContent = audioOn ? '🔊' : '🔇';
+  localStorage.setItem('orbitmerge.sound', audioOn ? 'on' : 'off');
+  if(audioOn){ ensureAudio(); blip(440,0.08,'sine',0.15); }
+});
+
+// ---------- Input ----------
+function pointerPos(e){
+  const rect = canvas.getBoundingClientRect();
+  const cx = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
+  return cx * (W / rect.width);
+}
+function onMove(e){
+  if(!running) return;
+  pointerX = pointerPos(e);
+  pointerActive = true;
+  if(held) held.x = clampDropX(pointerX);
+  e.preventDefault();
+}
+function onDrop(e){
+  if(!running || !held || dropCooldown>0) return;
+  ensureAudio();
+  // commit the held orb into the world
+  const o = makeOrb(held.x, DROP_Y, held.tier);
+  o.vy = 1.5;
+  orbs.push(o);
+  dropSound();
+  held = null;
+  dropCooldown = 16; // frames before next orb appears
+  e.preventDefault();
+}
+canvas.addEventListener('mousemove', onMove);
+canvas.addEventListener('mousedown', (e)=>{ onMove(e); });
+canvas.addEventListener('mouseup', onDrop);
+canvas.addEventListener('touchmove', onMove, {passive:false});
+canvas.addEventListener('touchstart', (e)=>{ onMove(e); }, {passive:false});
+canvas.addEventListener('touchend', onDrop, {passive:false});
+
+// ---------- Physics ----------
+function stepPhysics(){
+  const n = orbs.length;
+  // integrate
+  for(let i=0;i<n;i++){
+    const o = orbs[i];
+    if(o.spawnT>0) o.spawnT = Math.max(0, o.spawnT - 0.08);
+    o.vy += GRAV;
+    o.vx *= FRICTION;
+    o.x += o.vx;
+    o.y += o.vy;
+  }
+  for(let s=0;s<SUBSTEPS;s++){
+    // walls / floor
+    for(let i=0;i<n;i++){
+      const o = orbs[i];
+      if(o.x - o.r < LEFT){ o.x = LEFT + o.r; o.vx = -o.vx*REST; }
+      if(o.x + o.r > RIGHT){ o.x = RIGHT - o.r; o.vx = -o.vx*REST; }
+      if(o.y + o.r > FLOOR){ o.y = FLOOR - o.r; o.vy = -o.vy*REST; o.vx *= 0.92; }
+    }
+    // pairwise collisions
+    for(let i=0;i<n;i++){
+      const a = orbs[i];
+      if(a.dead) continue;
+      for(let j=i+1;j<n;j++){
+        const b = orbs[j];
+        if(b.dead) continue;
+        let dx = b.x - a.x, dy = b.y - a.y;
+        let dist = Math.hypot(dx,dy);
+        const minD = a.r + b.r;
+        if(dist < minD && dist > 0.0001){
+          // merge check
+          if(a.tier === b.tier && !a.merging && !b.merging && a.tier < MAX_TIER){
+            mergeOrbs(a,b);
+            continue;
+          }
+          const overlap = (minD - dist);
+          const nx = dx/dist, ny = dy/dist;
+          const push = overlap/2;
+          a.x -= nx*push; a.y -= ny*push;
+          b.x += nx*push; b.y += ny*push;
+          // relative velocity along normal
+          const rvx = b.vx - a.vx, rvy = b.vy - a.vy;
+          const vn = rvx*nx + rvy*ny;
+          if(vn < 0){
+            const imp = -(1+REST)*vn/2;
+            a.vx -= imp*nx; a.vy -= imp*ny;
+            b.vx += imp*nx; b.vy += imp*ny;
+          }
+        }
+      }
+    }
+  }
+  // remove dead (merged) orbs
+  if(orbs.some(o=>o.dead)) orbs = orbs.filter(o=>!o.dead);
+}
+
+function mergeOrbs(a, b){
+  a.merging = b.merging = true;
+  b.dead = true;
+  const nt = a.tier + 1;
+  const mx = (a.x+b.x)/2, my = (a.y+b.y)/2;
+  a.dead = true;
+  const merged = makeOrb(mx, my, nt);
+  merged.vx = (a.vx+b.vx)/2;
+  merged.vy = (a.vy+b.vy)/2 - 1.2;
+  merged.spawnT = 1;
+  orbs.push(merged);
+
+  const gain = TIERS[nt].score;
+  addScore(gain);
+  spawnPopup(mx, my - merged.r, '+'+gain, TIERS[nt].color);
+  burst(mx, my, TIERS[nt].glow, 10 + nt*2);
+  shake = Math.min(14, 5 + nt*1.2);
+  mergeSound(nt);
+
+  if(nt > highestTier) highestTier = nt;
+  if(nt === MAX_TIER){
+    // reaching the Star is a big celebration & bonus
+    addScore(150);
+    spawnPopup(mx, my - merged.r - 18, 'STAR! +150', '#fff1a8');
+    burst(mx, my, '#fff1a8', 40);
+    shake = 18;
+  }
+}
+
+// ---------- Effects ----------
+function burst(x,y,color,count){
+  for(let i=0;i<count;i++){
+    const a = Math.random()*Math.PI*2;
+    const sp = 1.5 + Math.random()*4.5;
+    particles.push({ x,y, vx:Math.cos(a)*sp, vy:Math.sin(a)*sp - 1,
+      life:1, color, r: 1.5 + Math.random()*2.5 });
+  }
+}
+function spawnPopup(x,y,text,color){
+  popups.push({ x,y, text, color, life:1 });
+}
+function updateEffects(){
+  for(const p of particles){
+    p.vy += 0.12; p.x += p.vx; p.y += p.vy; p.vx *= 0.96; p.life -= 0.025;
+  }
+  particles = particles.filter(p=>p.life>0);
+  for(const t of popups){ t.y -= 0.7; t.life -= 0.018; }
+  popups = popups.filter(t=>t.life>0);
+  if(shake>0) shake *= 0.86;
+  if(shake<0.3) shake = 0;
+}
+
+// ---------- Score ----------
+function addScore(n){
+  score += n;
+  scoreEl.textContent = score;
+  if(score > best){
+    best = score; bestEl.textContent = best;
+    localStorage.setItem(BEST_KEY, String(best));
+  }
+}
+
+// ---------- Game over check ----------
+function checkOverflow(){
+  let over = false;
+  for(const o of orbs){
+    // an orb counts toward overflow only when it's settled (slow) above the dead line
+    if(o.spawnT<=0 && o.y - o.r < DEAD_LINE && Math.abs(o.vy) < 0.6){
+      over = true; break;
+    }
+  }
+  if(over){
+    overflowTimer++;
+    if(overflowTimer > 70) endGame();
+  } else {
+    overflowTimer = Math.max(0, overflowTimer - 2);
+  }
+}
+
+function endGame(){
+  if(gameOver) return;
+  gameOver = true;
+  running = false;
+  finalEl.textContent = score;
+  let msg = 'Nice run!';
+  if(highestTier >= MAX_TIER) msg = 'You forged the Star — legendary!';
+  else if(highestTier >= 7) msg = 'So close to the Star. Go again!';
+  else if(score >= best && score>0) msg = 'New personal best! 🎉';
+  overMsg.textContent = msg;
+  overScreen.classList.add('show');
+  blip(120,0.3,'sawtooth',0.18);
+}
+
+// ---------- Rendering ----------
+function roundedRect(x,y,w,h,r){
+  ctx.beginPath();
+  ctx.moveTo(x+r,y);
+  ctx.arcTo(x+w,y,x+w,y+h,r);
+  ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r);
+  ctx.arcTo(x,y,x+w,y,r);
+  ctx.closePath();
+}
+
+function drawOrb(x,y,r,tier,alpha=1){
+  const t = TIERS[tier];
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  // glow
+  ctx.shadowColor = t.glow;
+  ctx.shadowBlur = 18;
+  const g = ctx.createRadialGradient(x - r*0.35, y - r*0.4, r*0.1, x, y, r);
+  g.addColorStop(0, '#ffffff');
+  g.addColorStop(0.25, t.color);
+  g.addColorStop(1, t.glow);
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
+  ctx.shadowBlur = 0;
+  // highlight
+  ctx.globalAlpha = alpha*0.5;
+  ctx.fillStyle = 'rgba(255,255,255,.9)';
+  ctx.beginPath(); ctx.arc(x - r*0.32, y - r*0.36, r*0.22, 0, Math.PI*2); ctx.fill();
+  // rim
+  ctx.globalAlpha = alpha*0.35;
+  ctx.lineWidth = 1.5; ctx.strokeStyle = '#ffffff';
+  ctx.beginPath(); ctx.arc(x,y,r-1,0,Math.PI*2); ctx.stroke();
+  // pip for top tier
+  if(tier === MAX_TIER){
+    ctx.globalAlpha = alpha;
+    drawStar(x,y,r*0.55,'#fff');
+  }
+  ctx.restore();
+}
+function drawStar(cx,cy,R,color){
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  for(let i=0;i<10;i++){
+    const ang = -Math.PI/2 + i*Math.PI/5;
+    const rad = (i%2===0)? R : R*0.45;
+    const x = cx + Math.cos(ang)*rad, y = cy + Math.sin(ang)*rad;
+    i===0? ctx.moveTo(x,y): ctx.lineTo(x,y);
+  }
+  ctx.closePath(); ctx.fill();
+}
+
+function render(){
+  ctx.clearRect(0,0,W,H);
+  ctx.save();
+  if(shake>0){
+    ctx.translate((Math.random()-.5)*shake, (Math.random()-.5)*shake);
+  }
+
+  // jar walls
+  ctx.fillStyle = 'rgba(255,255,255,.05)';
+  roundedRect(WALL-6, DEAD_LINE-2, W-(WALL-6)*2, FLOOR-DEAD_LINE+10, 16); ctx.fill();
+  // dead line
+  const pulse = 0.35 + 0.25*Math.sin(frameCount*0.08);
+  ctx.strokeStyle = `rgba(255,93,115,${overflowTimer>0? 0.4+pulse*0.6 : 0.22})`;
+  ctx.lineWidth = 2; ctx.setLineDash([8,8]);
+  ctx.beginPath(); ctx.moveTo(WALL, DEAD_LINE); ctx.lineTo(W-WALL, DEAD_LINE); ctx.stroke();
+  ctx.setLineDash([]);
+
+  // orbs
+  for(const o of orbs){
+    const pop = o.spawnT>0 ? (1 + 0.25*Math.sin((1-o.spawnT)*Math.PI)) : 1;
+    drawOrb(o.x, o.y, o.r*pop, o.tier);
+  }
+
+  // particles
+  for(const p of particles){
+    ctx.globalAlpha = Math.max(0,p.life);
+    ctx.fillStyle = p.color;
+    ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,Math.PI*2); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // held orb + aim line
+  if(running && held && dropCooldown<=0){
+    const t = TIERS[held.tier];
+    ctx.globalAlpha = 0.25;
+    ctx.strokeStyle = t.color; ctx.lineWidth = 2; ctx.setLineDash([5,7]);
+    ctx.beginPath(); ctx.moveTo(held.x, DROP_Y + t.r); ctx.lineTo(held.x, FLOOR); ctx.stroke();
+    ctx.setLineDash([]); ctx.globalAlpha = 1;
+    const bob = Math.sin(frameCount*0.1)*2;
+    drawOrb(held.x, DROP_Y + bob, t.r, held.tier);
+  }
+
+  // popups
+  for(const t of popups){
+    ctx.globalAlpha = Math.max(0,t.life);
+    ctx.fillStyle = t.color;
+    ctx.font = '800 18px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(t.text, t.x, t.y);
+  }
+  ctx.globalAlpha = 1;
+
+  // next preview (top-right inside canvas)
+  ctx.save();
+  ctx.globalAlpha = 0.9;
+  ctx.fillStyle = 'rgba(255,255,255,.55)';
+  ctx.font = '700 10px system-ui'; ctx.textAlign = 'right';
+  ctx.fillText('NEXT', W-16, 24);
+  drawOrb(W-30, 40, Math.min(14, TIERS[nextTier].r*0.6), nextTier, 0.95);
+  ctx.restore();
+
+  ctx.restore();
+}
+
+// ---------- Main loop ----------
+let lastT = 0, acc = 0;
+const DT = 1000/60;
+function loop(ts){
+  requestAnimationFrame(loop);
+  if(!lastT) lastT = ts;
+  let dtMs = ts - lastT; lastT = ts;
+  if(dtMs > 100) dtMs = 100; // avoid spiral after tab switch
+  acc += dtMs;
+  while(acc >= DT){
+    frameCount++;
+    if(running){
+      if(dropCooldown>0){ dropCooldown--; if(dropCooldown===0 && !held) newHeld(); }
+      stepPhysics();
+      checkOverflow();
+    }
+    updateEffects();
+    acc -= DT;
+  }
+  render();
+}
+
+// ---------- Game flow ----------
+function startGame(){
+  ensureAudio();
+  orbs = []; particles = []; popups = [];
+  score = 0; scoreEl.textContent = '0';
+  gameOver = false; running = true; overflowTimer = 0; highestTier = 0;
+  held = null; nextTier = randSpawnTier(); dropCooldown = 0;
+  newHeld();
+  startScreen.classList.remove('show');
+  overScreen.classList.remove('show');
+}
+
+document.getElementById('playBtn').addEventListener('click', startGame);
+document.getElementById('againBtn').addEventListener('click', startGame);
+
+// keyboard: space/click to drop, arrows to nudge
+window.addEventListener('keydown', (e)=>{
+  if(!running) { if(e.code==='Space'||e.code==='Enter'){ startGame(); } return; }
+  if(e.code==='ArrowLeft'){ pointerX -= 18; if(held) held.x = clampDropX(pointerX); }
+  if(e.code==='ArrowRight'){ pointerX += 18; if(held) held.x = clampDropX(pointerX); }
+  if(e.code==='Space' && held && dropCooldown<=0){
+    const o = makeOrb(held.x, DROP_Y, held.tier); o.vy=1.5; orbs.push(o);
+    dropSound(); held=null; dropCooldown=16; e.preventDefault();
+  }
+});
+
+fitCanvas();
+requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
