@@ -218,17 +218,19 @@ bestEl.textContent = best;
 // Single source of truth for balance — tune the game here (and A/B-able later).
 const CONFIG = {
   physics: { grav:0.42, rest:0.12, friction:0.985, substeps:8 },
-  jar:     { wall:10, floorInset:14, dropY:64, deadLine:96 },
+  // Tighter well: narrower (marginX) + lower ceiling (deadLine) so big orbs crowd
+  // and overflow is a real, constant threat. This is where the challenge lives.
+  jar:     { wall:10, marginX:30, floorInset:14, dropY:60, deadLine:150 },
   spawn:   {
-    maxTier:4,
-    weights:    [0.5,  0.3,  0.14, 0.06], // early game — mostly small orbs
-    weightsLate:[0.25, 0.30, 0.28, 0.17], // late game — more mid/high orbs (harder)
-    rampScore: 1200,                      // score at which difficulty ~maxes out
+    maxTier:4, maxTierLate:5,                     // bigger orbs start dropping as you climb
+    weights:    [0.5,  0.30, 0.14, 0.06, 0.0 ],   // early game — mostly small orbs
+    weightsLate:[0.10, 0.22, 0.30, 0.26, 0.12],   // late game — mostly mid/big orbs (harder)
+    rampScore: 650,                               // score at which difficulty ~maxes out
   },
   combo:   { windowFrames:16, maxMult:9 }, // chained merges within window stack a multiplier
   dropCooldownFrames: 16,
-  overflowGraceFrames: 90,   // frames an orb may sit above the dead line before game over
-  starBonus: 150,
+  overflowGraceFrames: 55,   // frames an orb may sit above the dead line before game over
+  starBonus: 250,
   maxParticles: 260,
   analytics: {
     endpoint: null,          // set to a collector URL to ship events; null = local only
@@ -297,9 +299,9 @@ window.addEventListener('resize', fitCanvas);
 
 // World is always reasoned about in BASE_W x BASE_H units.
 const W = BASE_W, H = BASE_H;
-const WALL = CONFIG.jar.wall;          // inner wall thickness
+const WALL = CONFIG.jar.wall;          // visual wall thickness
 const FLOOR = H - CONFIG.jar.floorInset; // floor y
-const LEFT = WALL, RIGHT = W - WALL;
+const LEFT = CONFIG.jar.marginX, RIGHT = W - CONFIG.jar.marginX; // narrowed play area
 const DROP_Y = CONFIG.jar.dropY;       // y where the held orb sits
 const DEAD_LINE = CONFIG.jar.deadLine; // overflow line
 
@@ -318,8 +320,6 @@ const TIERS = [
   { r:77, color:'#fff1a8', glow:'#ffd84d', score:90 }, // top tier — "Star"
 ];
 const MAX_TIER = TIERS.length - 1;
-// Only the first few tiers can be dropped from the top.
-const SPAWN_MAX = CONFIG.spawn.maxTier;
 
 // Build the chain preview chips
 const chainPreview = document.getElementById('chainPreview');
@@ -374,20 +374,21 @@ let pointerX = W/2;
 let pointerActive = false;
 
 function randSpawnTier(){
-  // Weighted toward smaller tiers, but the distribution drifts toward bigger
-  // orbs as the score climbs (progressive difficulty). Weights come from CONFIG.
+  // Difficulty ramps with score: both the distribution AND the number of
+  // spawnable tiers drift upward, so bigger orbs arrive more often over time.
   const sp = CONFIG.spawn;
   const d = Math.min(1, score / sp.rampScore); // 0 = start, 1 = fully ramped
-  const max = Math.min(SPAWN_MAX, sp.weights.length);
+  const maxT = Math.max(1, Math.min(sp.weights.length,
+                 Math.round(sp.maxTier + (sp.maxTierLate - sp.maxTier) * d)));
   let total = 0;
   const w = [];
-  for(let i=0;i<max;i++){
-    w[i] = sp.weights[i] + (sp.weightsLate[i] - sp.weights[i]) * d;
+  for(let i=0;i<maxT;i++){
+    w[i] = Math.max(0, sp.weights[i] + (sp.weightsLate[i] - sp.weights[i]) * d);
     total += w[i];
   }
   let r = Math.random() * total;
-  for(let i=0;i<max;i++){ r -= w[i]; if(r < 0) return i; }
-  return max - 1;
+  for(let i=0;i<maxT;i++){ r -= w[i]; if(r < 0) return i; }
+  return maxT - 1;
 }
 
 let orbId = 1;
@@ -646,12 +647,22 @@ function mergeOrbs(a, b){
   if(tutorialActive) completeTutorial();
   if(nt > highestTier) highestTier = nt;
   if(nt === MAX_TIER){
-    // reaching the Star is a big celebration & bonus
-    addScore(CONFIG.starBonus);
-    spawnPopup(mx, my - merged.r - 18, 'STAR! +'+CONFIG.starBonus, '#fff1a8');
-    burst(mx, my, '#fff1a8', 40);
-    spawnRing(mx, my, 240, '#fff1a8', 1.6);
-    shake = 20;
+    // The Star DETONATES: it clears itself + nearby orbs, freeing the jar and
+    // paying a big bonus. This makes the top tier a strategic goal you chase
+    // (and relieves pressure as a reward) instead of a dead, space-clogging orb.
+    merged.dead = true;
+    let cleared = 0;
+    for(const o of orbs){
+      if(o.dead) continue;
+      if(Math.hypot(o.x - mx, o.y - my) < merged.r*1.9){ o.dead = true; cleared++; }
+    }
+    const bonus = CONFIG.starBonus + cleared*25;
+    addScore(bonus);
+    spawnPopup(mx, my - 34, 'STAR! +'+bonus, '#fff1a8');
+    burst(mx, my, '#fff1a8', 60);
+    spawnRing(mx, my, 340, '#fff1a8', 1.1);
+    spawnRing(mx, my, 200, '#ffffff', 1.7);
+    shake = 22;
     starStinger();
     if(!starReached){
       starReached = true;
@@ -834,14 +845,20 @@ function render(){
     ctx.translate((Math.random()-.5)*shake, (Math.random()-.5)*shake);
   }
 
-  // jar walls
+  // jar walls (narrowed play area)
   ctx.fillStyle = 'rgba(255,255,255,.05)';
-  roundedRect(WALL-6, DEAD_LINE-2, W-(WALL-6)*2, FLOOR-DEAD_LINE+10, 16); ctx.fill();
+  roundedRect(LEFT-6, DEAD_LINE-2, (RIGHT-LEFT)+12, FLOOR-DEAD_LINE+10, 16); ctx.fill();
+  // side wall edges
+  ctx.strokeStyle = 'rgba(255,255,255,.10)'; ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(LEFT-6, DEAD_LINE-2); ctx.lineTo(LEFT-6, FLOOR+8);
+  ctx.moveTo(RIGHT+6, DEAD_LINE-2); ctx.lineTo(RIGHT+6, FLOOR+8);
+  ctx.stroke();
   // dead line
   const pulse = 0.35 + 0.25*Math.sin(frameCount*0.08);
   ctx.strokeStyle = `rgba(255,93,115,${overflowTimer>0? 0.4+pulse*0.6 : 0.22})`;
   ctx.lineWidth = 2; ctx.setLineDash([8,8]);
-  ctx.beginPath(); ctx.moveTo(WALL, DEAD_LINE); ctx.lineTo(W-WALL, DEAD_LINE); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(LEFT, DEAD_LINE); ctx.lineTo(RIGHT, DEAD_LINE); ctx.stroke();
   ctx.setLineDash([]);
 
   // orbs
