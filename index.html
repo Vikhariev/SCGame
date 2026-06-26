@@ -218,9 +218,9 @@ bestEl.textContent = best;
 // Single source of truth for balance — tune the game here (and A/B-able later).
 const CONFIG = {
   physics: { grav:0.42, rest:0.12, friction:0.985, substeps:8 },
-  // Tighter well: narrower (marginX) + lower ceiling (deadLine) so big orbs crowd
-  // and overflow is a real, constant threat. This is where the challenge lives.
-  jar:     { wall:10, marginX:30, floorInset:14, dropY:60, deadLine:150 },
+  // Small well (low capacity) so drops overwhelm merge throughput and the pile
+  // genuinely rises — overflow is a constant threat regardless of where you drop.
+  jar:     { wall:10, marginX:105, floorInset:14, dropY:52, deadLine:150 },
   spawn:   {
     maxTier:4, maxTierLate:5,                     // bigger orbs start dropping as you climb
     weights:    [0.5,  0.30, 0.14, 0.06, 0.0 ],   // early game — mostly small orbs
@@ -599,14 +599,14 @@ function stepPhysics(){
   // array so chain reactions (a fresh merged orb touching another) resolve too.
   for(let i=0;i<orbs.length;i++){
     const a = orbs[i];
-    if(a.dead || a.tier >= MAX_TIER) continue;
+    if(a.dead) continue;
     for(let j=i+1;j<orbs.length;j++){
       const b = orbs[j];
       if(b.dead || b.tier !== a.tier) continue;
       const dx = b.x - a.x, dy = b.y - a.y;
       const minD = a.r + b.r;
       if(dx*dx + dy*dy < minD*minD){
-        mergeOrbs(a, b);
+        mergeOrbs(a, b); // same-tier merge (two Stars annihilate, handled inside)
         break; // a is now dead — move on to the next orb
       }
     }
@@ -617,23 +617,38 @@ function stepPhysics(){
 
 function mergeOrbs(a, b){
   a.dead = true; b.dead = true;
-  const nt = a.tier + 1;
   const mx = (a.x+b.x)/2, my = (a.y+b.y)/2;
+
+  // combo applies to every merge
+  comboCount = comboTimer > 0 ? comboCount + 1 : 1;
+  comboTimer = CONFIG.combo.windowFrames;
+  if(comboCount > comboPeak) comboPeak = comboCount;
+  const mult = Math.min(comboCount, CONFIG.combo.maxMult);
+  totalMerges++;
+
+  // Two Stars annihilate for a huge bonus (no board clear). This is the ultimate
+  // goal — but it does NOT free the jar, so Stars still apply pressure (no exploit).
+  if(a.tier === MAX_TIER){
+    const bonus = CONFIG.starBonus * 4 * mult;
+    addScore(bonus);
+    spawnPopup(mx, my - 40, '★★ +'+bonus, '#fff1a8');
+    burst(mx, my, '#fff1a8', 80);
+    spawnRing(mx, my, 300, '#ffffff', 1.4);
+    spawnRing(mx, my, 400, '#fff1a8', 0.9);
+    shake = 26; starStinger();
+    Analytics.track('star_pop', { combo:comboCount, score, t:tms() });
+    return;
+  }
+
+  const nt = a.tier + 1;
   const merged = makeOrb(mx, my, nt);
   merged.vx = (a.vx+b.vx)/2;
   merged.vy = (a.vy+b.vy)/2 - 1.2;
   merged.spawnT = 1;
   orbs.push(merged);
 
-  // combo: merges within a short window stack a score multiplier
-  comboCount = comboTimer > 0 ? comboCount + 1 : 1;
-  comboTimer = CONFIG.combo.windowFrames;
-  if(comboCount > comboPeak) comboPeak = comboCount;
-  const mult = Math.min(comboCount, CONFIG.combo.maxMult);
-
   const gain = TIERS[nt].score * mult;
   addScore(gain);
-  totalMerges++;
   Analytics.track('merge', { from:a.tier, to:nt, x:norm(mx, W), y:norm(my, H), combo:comboCount, orbs:orbs.length, t:tms() });
 
   spawnPopup(mx, my - merged.r, '+'+gain, TIERS[nt].color);
@@ -647,23 +662,13 @@ function mergeOrbs(a, b){
   if(tutorialActive) completeTutorial();
   if(nt > highestTier) highestTier = nt;
   if(nt === MAX_TIER){
-    // The Star DETONATES: it clears itself + nearby orbs, freeing the jar and
-    // paying a big bonus. This makes the top tier a strategic goal you chase
-    // (and relieves pressure as a reward) instead of a dead, space-clogging orb.
-    merged.dead = true;
-    let cleared = 0;
-    for(const o of orbs){
-      if(o.dead) continue;
-      if(Math.hypot(o.x - mx, o.y - my) < merged.r*1.9){ o.dead = true; cleared++; }
-    }
-    const bonus = CONFIG.starBonus + cleared*25;
-    addScore(bonus);
-    spawnPopup(mx, my - 34, 'STAR! +'+bonus, '#fff1a8');
-    burst(mx, my, '#fff1a8', 60);
-    spawnRing(mx, my, 340, '#fff1a8', 1.1);
-    spawnRing(mx, my, 200, '#ffffff', 1.7);
-    shake = 22;
-    starStinger();
+    // Forged a Star — celebration + bonus, but it STAYS on the board (no detonation),
+    // so big orbs keep accumulating and overflow stays a real threat.
+    addScore(CONFIG.starBonus);
+    spawnPopup(mx, my - merged.r - 18, 'STAR! +'+CONFIG.starBonus, '#fff1a8');
+    burst(mx, my, '#fff1a8', 50);
+    spawnRing(mx, my, 260, '#fff1a8', 1.5);
+    shake = 20; starStinger();
     if(!starReached){
       starReached = true;
       Analytics.track('star_reached', { t:tms(), score:score, drops:totalDrops, merges:totalMerges });
