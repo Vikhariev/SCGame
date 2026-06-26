@@ -168,6 +168,64 @@ const BEST_KEY = 'orbitmerge.best';
 let best = parseInt(storeGet(BEST_KEY) || '0', 10) || 0;
 bestEl.textContent = best;
 
+// ---------- CONFIG ----------
+// Single source of truth for balance — tune the game here (and A/B-able later).
+const CONFIG = {
+  physics: { grav:0.42, rest:0.12, friction:0.985, substeps:8 },
+  jar:     { wall:10, floorInset:14, dropY:64, deadLine:96 },
+  spawn:   { maxTier:4, weights:[0.5, 0.3, 0.14, 0.06] }, // relative weights, capped at maxTier
+  dropCooldownFrames: 16,
+  overflowGraceFrames: 90,   // frames an orb may sit above the dead line before game over
+  starBonus: 150,
+  maxParticles: 260,
+  analytics: {
+    endpoint: null,          // set to a collector URL to ship events; null = local only
+    flushSize: 20,
+    debug: /[?&]debug=1/.test(location.search),
+  },
+};
+
+// ---------- Analytics ----------
+// Tiny event tracker. Buffers events, keeps a rolling local log (inspectable via
+// window.OrbitMerge.analytics.log()), and ships batches via sendBeacon when an
+// endpoint is configured. Safe with no backend — events just stay local.
+const Analytics = (() => {
+  const A = CONFIG.analytics;
+  const DEVICE_KEY = 'orbitmerge.device';
+  function newId(p){ return p + '_' + Math.random().toString(36).slice(2,10); }
+  let deviceId = storeGet(DEVICE_KEY);
+  if(!deviceId){ deviceId = newId('d') + Date.now().toString(36); storeSet(DEVICE_KEY, deviceId); }
+  let sessionId = newId('s');
+  let seq = 0;
+  let queue = [];   // pending network batch
+  let log = [];     // rolling local log (survives flush)
+  function track(name, props){
+    const ev = Object.assign({ e:name, ts:Date.now(), sid:sessionId, did:deviceId, seq:seq++ }, props || {});
+    queue.push(ev); log.push(ev);
+    if(log.length > 300) log.splice(0, log.length - 300);
+    if(A.debug) console.log('[orbit:analytics]', name, props || {});
+    try { storeSet('orbitmerge.events', JSON.stringify(log)); } catch(e){}
+    if(queue.length >= A.flushSize) flush();
+  }
+  function flush(){
+    if(!queue.length) return;
+    const batch = queue; queue = [];
+    if(A.endpoint){
+      try {
+        const body = JSON.stringify(batch);
+        if(navigator.sendBeacon){ navigator.sendBeacon(A.endpoint, new Blob([body], {type:'application/json'})); }
+        else { fetch(A.endpoint, {method:'POST', body, keepalive:true, headers:{'Content-Type':'application/json'}}).catch(()=>{}); }
+      } catch(e){}
+    }
+  }
+  function newSession(){ sessionId = newId('s'); seq = 0; }
+  window.addEventListener('visibilitychange', () => { if(document.visibilityState === 'hidden') flush(); });
+  window.addEventListener('pagehide', flush);
+  return { track, flush, newSession, log:()=>log.slice(), queue:()=>queue.slice(),
+           get deviceId(){return deviceId;}, get sessionId(){return sessionId;} };
+})();
+const GAMES_KEY = 'orbitmerge.games';
+
 // ---------- Responsive sizing ----------
 const BASE_W = 440, BASE_H = 560;
 function fitCanvas(){
@@ -187,11 +245,11 @@ window.addEventListener('resize', fitCanvas);
 
 // World is always reasoned about in BASE_W x BASE_H units.
 const W = BASE_W, H = BASE_H;
-const WALL = 10;            // inner wall thickness
-const FLOOR = H - 14;       // floor y
+const WALL = CONFIG.jar.wall;          // inner wall thickness
+const FLOOR = H - CONFIG.jar.floorInset; // floor y
 const LEFT = WALL, RIGHT = W - WALL;
-const DROP_Y = 64;          // y where the held orb sits
-const DEAD_LINE = 96;       // overflow line
+const DROP_Y = CONFIG.jar.dropY;       // y where the held orb sits
+const DEAD_LINE = CONFIG.jar.deadLine; // overflow line
 
 // ---------- Orb tiers ----------
 // radius grows with tier; colors form a pleasant rainbow→gold ramp
@@ -209,7 +267,7 @@ const TIERS = [
 ];
 const MAX_TIER = TIERS.length - 1;
 // Only the first few tiers can be dropped from the top.
-const SPAWN_MAX = 4;
+const SPAWN_MAX = CONFIG.spawn.maxTier;
 
 // Build the chain preview chips
 const chainPreview = document.getElementById('chainPreview');
@@ -233,10 +291,18 @@ let overflowTimer = 0;
 let frameCount = 0;
 let highestTier = 0;
 
-const GRAV = 0.42;
-const REST = 0.12;       // restitution (bounciness)
-const FRICTION = 0.985;
-const SUBSTEPS = 8;      // position-solver iterations per frame (higher = firmer stacks)
+// Per-game analytics counters
+let sessionStartMs = 0;
+let totalDrops = 0, totalMerges = 0;
+let starReached = false;
+let lastGameOverMs = 0, lastScore = 0, lastMaxTier = 0;
+const tms = () => sessionStartMs ? (Date.now() - sessionStartMs) : 0; // ms since game start
+const norm = (v, span) => Math.round((v / span) * 1000) / 1000;
+
+const GRAV = CONFIG.physics.grav;
+const REST = CONFIG.physics.rest;       // restitution (bounciness)
+const FRICTION = CONFIG.physics.friction;
+const SUBSTEPS = CONFIG.physics.substeps; // position-solver iterations per frame (higher = firmer stacks)
 
 // Held / next orb
 let held = null;         // {tier, x}
@@ -247,12 +313,14 @@ let pointerX = W/2;
 let pointerActive = false;
 
 function randSpawnTier(){
-  // weight toward smaller tiers
-  const r = Math.random();
-  if (r < 0.5) return 0;
-  if (r < 0.8) return 1;
-  if (r < 0.94) return 2;
-  return Math.min(3, SPAWN_MAX-1);
+  // weighted toward smaller tiers; weights/cap come from CONFIG.spawn
+  const w = CONFIG.spawn.weights;
+  const max = Math.min(SPAWN_MAX, w.length);
+  let total = 0;
+  for(let i=0;i<max;i++) total += w[i];
+  let r = Math.random() * total;
+  for(let i=0;i<max;i++){ r -= w[i]; if(r < 0) return i; }
+  return max - 1;
 }
 
 let orbId = 1;
@@ -306,6 +374,7 @@ soundBtn.addEventListener('click', () => {
   audioOn = !audioOn;
   soundBtn.textContent = audioOn ? '🔊' : '🔇';
   storeSet('orbitmerge.sound', audioOn ? 'on' : 'off');
+  Analytics.track('mute_toggle', { to: audioOn ? 'on' : 'off' });
   if(audioOn){ ensureAudio(); blip(440,0.08,'sine',0.15); }
 });
 
@@ -322,16 +391,21 @@ function onMove(e){
   if(held) held.x = clampDropX(pointerX, held.tier);
   e.preventDefault();
 }
-function onDrop(e){
-  if(!running || !held || dropCooldown>0) return;
-  ensureAudio();
-  // commit the held orb into the world
+// Commit the held orb into the world (single code path for mouse / touch / keyboard).
+function dropHeld(){
   const o = makeOrb(held.x, DROP_Y, held.tier);
   o.vy = 1.5;
   orbs.push(o);
+  totalDrops++;
+  Analytics.track('orb_drop', { x:norm(o.x, W), tier:o.tier, next:nextTier, orbs:orbs.length, t:tms() });
   dropSound();
   held = null;
-  dropCooldown = 16; // frames before next orb appears
+  dropCooldown = CONFIG.dropCooldownFrames; // frames before next orb appears
+}
+function onDrop(e){
+  if(!running || !held || dropCooldown>0) return;
+  ensureAudio();
+  dropHeld();
   e.preventDefault();
 }
 canvas.addEventListener('mousemove', onMove);
@@ -430,6 +504,8 @@ function mergeOrbs(a, b){
 
   const gain = TIERS[nt].score;
   addScore(gain);
+  totalMerges++;
+  Analytics.track('merge', { from:a.tier, to:nt, x:norm(mx, W), y:norm(my, H), orbs:orbs.length, t:tms() });
   spawnPopup(mx, my - merged.r, '+'+gain, TIERS[nt].color);
   burst(mx, my, TIERS[nt].glow, 10 + nt*2);
   shake = Math.min(14, 5 + nt*1.2);
@@ -438,15 +514,19 @@ function mergeOrbs(a, b){
   if(nt > highestTier) highestTier = nt;
   if(nt === MAX_TIER){
     // reaching the Star is a big celebration & bonus
-    addScore(150);
-    spawnPopup(mx, my - merged.r - 18, 'STAR! +150', '#fff1a8');
+    addScore(CONFIG.starBonus);
+    spawnPopup(mx, my - merged.r - 18, 'STAR! +'+CONFIG.starBonus, '#fff1a8');
     burst(mx, my, '#fff1a8', 40);
     shake = 18;
+    if(!starReached){
+      starReached = true;
+      Analytics.track('star_reached', { t:tms(), score:score, drops:totalDrops, merges:totalMerges });
+    }
   }
 }
 
 // ---------- Effects ----------
-const MAX_PARTICLES = 260;   // hard cap so chained merges can't flood the canvas
+const MAX_PARTICLES = CONFIG.maxParticles;   // hard cap so chained merges can't flood the canvas
 function burst(x,y,color,count){
   for(let i=0;i<count;i++){
     const a = Math.random()*Math.PI*2;
@@ -496,7 +576,7 @@ function checkOverflow(){
   }
   if(over){
     overflowTimer++;
-    if(overflowTimer > 90) endGame();   // ~1.5s of grace before the jar overflows
+    if(overflowTimer > CONFIG.overflowGraceFrames) endGame(); // ~1.5s grace before overflow
   } else {
     overflowTimer = Math.max(0, overflowTimer - 1);
   }
@@ -514,6 +594,13 @@ function endGame(){
   overMsg.textContent = msg;
   overScreen.classList.add('show');
   blip(120,0.3,'sawtooth',0.18);
+
+  Analytics.track('game_over', {
+    score, max_tier:highestTier, duration_sec:Math.round(tms()/100)/10,
+    orbs:orbs.length, drops:totalDrops, merges:totalMerges, is_best: score>=best,
+  });
+  Analytics.flush();
+  lastGameOverMs = Date.now(); lastScore = score; lastMaxTier = highestTier;
 }
 
 // ---------- Rendering ----------
@@ -664,6 +751,17 @@ function startGame(){
   newHeld();
   startScreen.classList.remove('show');
   overScreen.classList.remove('show');
+
+  // ---- analytics: new session/game ----
+  const gamesPlayed = parseInt(storeGet(GAMES_KEY) || '0', 10) || 0;
+  storeSet(GAMES_KEY, String(gamesPlayed + 1));
+  Analytics.newSession();
+  sessionStartMs = Date.now();
+  totalDrops = 0; totalMerges = 0; starReached = false;
+  if(lastGameOverMs){
+    Analytics.track('retry', { prev_score:lastScore, prev_max_tier:lastMaxTier, gap_ms: Date.now() - lastGameOverMs });
+  }
+  Analytics.track('game_start', { game_index:gamesPlayed, is_first_ever: gamesPlayed === 0, best_before:best });
 }
 
 document.getElementById('playBtn').addEventListener('click', startGame);
@@ -675,10 +773,12 @@ window.addEventListener('keydown', (e)=>{
   if(e.code==='ArrowLeft'){ pointerX -= 18; if(held) held.x = clampDropX(pointerX, held.tier); }
   if(e.code==='ArrowRight'){ pointerX += 18; if(held) held.x = clampDropX(pointerX, held.tier); }
   if(e.code==='Space' && held && dropCooldown<=0){
-    const o = makeOrb(held.x, DROP_Y, held.tier); o.vy=1.5; orbs.push(o);
-    dropSound(); held=null; dropCooldown=16; e.preventDefault();
+    ensureAudio(); dropHeld(); e.preventDefault();
   }
 });
+
+// Expose config + analytics for inspection/tuning (e.g. window.OrbitMerge.analytics.log())
+window.OrbitMerge = { config: CONFIG, analytics: Analytics };
 
 fitCanvas();
 requestAnimationFrame(loop);
