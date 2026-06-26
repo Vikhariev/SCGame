@@ -7,7 +7,7 @@
 <title>Orbit Merge — drop, merge, glow</title>
 <style>
   :root{
-    --bg0:#0b0c1d; --bg1:#15173a; --ink:#eef1ff; --muted:#9aa0d4;
+    --bg0:#0b0c1d; --bg1:#15173a; --ink:#eef1ff; --muted:#b6bbe8;
     --accent:#ffd45e; --danger:#ff5d73;
   }
   *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
@@ -57,7 +57,29 @@
     box-shadow:0 24px 60px rgba(0,0,0,.55), inset 0 0 0 1px rgba(255,255,255,.06);
     touch-action:none;
   }
-  .hint{ font-size:12px; color:var(--muted); margin-top:2px; }
+  .hint{ font-size:13px; color:var(--muted); margin-top:2px; }
+  .pill.next{ min-width:auto; padding:6px 12px; }
+  .next-orb{
+    width:28px; height:28px; border-radius:50%; margin:2px auto 0;
+    display:flex; align-items:center; justify-content:center;
+    font-size:13px; font-weight:800; color:rgba(25,20,45,.85);
+    text-shadow:0 0 2px rgba(255,255,255,.55); box-shadow:0 0 8px rgba(0,0,0,.25) inset;
+  }
+  .controls{ display:flex; gap:14px; margin-top:6px; }
+  /* Tutorial coach banner */
+  .coach{
+    position:absolute; top:12px; left:50%; transform:translateX(-50%);
+    display:none; align-items:center; gap:10px; z-index:6; pointer-events:none;
+    background:rgba(10,11,29,.86); border:1px solid rgba(255,255,255,.14);
+    border-radius:14px; padding:9px 14px; font-size:15px; font-weight:700;
+    backdrop-filter:blur(6px); max-width:92%; text-align:center; white-space:nowrap;
+  }
+  .coach.show{ display:flex; }
+  .coach button{
+    pointer-events:auto;
+    background:rgba(255,255,255,.12); border:none; color:var(--ink);
+    border-radius:9px; padding:5px 10px; font-size:12px; font-weight:700; cursor:pointer;
+  }
 
   /* Overlays */
   .overlay{
@@ -88,11 +110,14 @@
   .row{ display:flex; gap:10px; align-items:center; }
   .merge-chain{ display:flex; gap:6px; align-items:center; flex-wrap:wrap; justify-content:center; margin-top:4px; }
   .chip{ width:22px; height:22px; border-radius:50%; box-shadow:0 0 10px rgba(0,0,0,.3) inset; }
-  footer{ font-size:11px; color:var(--muted); opacity:.7; margin-top:auto; padding-bottom:4px; }
+  footer{ font-size:12px; color:var(--muted); opacity:.85; margin-top:auto; padding-bottom:4px; }
   .iconbtn{
-    width:38px;height:38px;border-radius:12px;display:flex;align-items:center;justify-content:center;
-    background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);cursor:pointer;font-size:17px;
+    width:44px;height:44px;border-radius:13px;display:flex;align-items:center;justify-content:center;
+    background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);cursor:pointer;font-size:19px;
+    color:var(--ink); -webkit-appearance:none; appearance:none; padding:0;
   }
+  .iconbtn:active{ transform:scale(.94); }
+  .iconbtn[disabled]{ opacity:.35; pointer-events:none; }
 </style>
 </head>
 <body>
@@ -105,17 +130,17 @@
         <small>drop · merge · glow</small>
       </div>
     </div>
-    <div class="row">
-      <div class="scores">
-        <div class="pill"><div class="label">Score</div><div class="val" id="score">0</div></div>
-        <div class="pill best"><div class="label">Best</div><div class="val" id="best">0</div></div>
-      </div>
-      <div class="iconbtn" id="soundBtn" title="Sound">🔊</div>
+    <div class="scores">
+      <div class="pill"><div class="label">Score</div><div class="val" id="score">0</div></div>
+      <div class="pill best"><div class="label">Best</div><div class="val" id="best">0</div></div>
+      <div class="pill next"><div class="label">Next</div><div class="next-orb" id="nextOrb">1</div></div>
     </div>
   </header>
 
   <div class="stage">
     <canvas id="game" width="440" height="560"></canvas>
+
+    <div class="coach" id="coach"><span id="coachText"></span><button id="coachSkip">Skip</button></div>
 
     <div class="overlay show" id="startScreen">
       <h2>Orbit Merge</h2>
@@ -131,6 +156,18 @@
       <p id="overMsg">Nice run.</p>
       <button class="cta" id="againBtn">Play again</button>
     </div>
+
+    <div class="overlay" id="pauseScreen">
+      <h2>Paused</h2>
+      <button class="cta" id="resumeBtn">Resume</button>
+      <button class="ghost" id="restartBtn2">Restart</button>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button class="iconbtn" id="pauseBtn" title="Pause" aria-label="Pause" disabled>⏸</button>
+    <button class="iconbtn" id="restartBtn" title="Restart" aria-label="Restart" disabled>↺</button>
+    <button class="iconbtn" id="soundBtn" title="Sound" aria-label="Sound">🔊</button>
   </div>
 
   <div class="hint">Tip: keep small orbs near the top, build big ones at the bottom.</div>
@@ -150,7 +187,16 @@ const finalEl = document.getElementById('finalScore');
 const overMsg = document.getElementById('overMsg');
 const startScreen = document.getElementById('startScreen');
 const overScreen  = document.getElementById('overScreen');
+const pauseScreen = document.getElementById('pauseScreen');
 const soundBtn = document.getElementById('soundBtn');
+const pauseBtn = document.getElementById('pauseBtn');
+const restartBtn = document.getElementById('restartBtn');
+const restartBtn2 = document.getElementById('restartBtn2');
+const resumeBtn = document.getElementById('resumeBtn');
+const nextOrbEl = document.getElementById('nextOrb');
+const coach = document.getElementById('coach');
+const coachText = document.getElementById('coachText');
+const coachSkip = document.getElementById('coachSkip');
 
 // Safe localStorage wrappers — Private Mode / locked-down WebViews throw on
 // access, which would otherwise crash the whole game at startup.
@@ -305,6 +351,11 @@ let starReached = false;
 
 // Combo (chain of merges within a short window)
 let comboCount = 0, comboTimer = 0, comboPeak = 0;
+
+// Pause + first-run tutorial
+let paused = false;
+let tutorialActive = false, tutorialStep = 0;
+const TUT_KEY = 'orbitmerge.tutorial';
 let lastGameOverMs = 0, lastScore = 0, lastMaxTier = 0;
 const tms = () => sessionStartMs ? (Date.now() - sessionStartMs) : 0; // ms since game start
 const norm = (v, span) => Math.round((v / span) * 1000) / 1000;
@@ -353,7 +404,44 @@ function makeOrb(x, y, tier){
 function newHeld(){
   held = { tier: nextTier, x: clampDropX(pointerX, nextTier) };
   nextTier = randSpawnTier();
+  updateNextUI();
   dropCooldown = 0;
+}
+
+// HUD "Next" chip reflects the upcoming orb (tier colour + number).
+function updateNextUI(){
+  const t = TIERS[nextTier];
+  nextOrbEl.style.background = `radial-gradient(circle at 35% 30%, #fff, ${t.color} 55%, ${t.glow} 100%)`;
+  nextOrbEl.textContent = nextTier === MAX_TIER ? '★' : (nextTier + 1);
+}
+
+// ---------- First-run tutorial ----------
+function updateCoach(){
+  if(!tutorialActive){ coach.classList.remove('show'); return; }
+  const msgs = ['👆 Move to aim', '👇 Release to drop', '✨ Match two of the same!'];
+  coachText.textContent = msgs[tutorialStep] || '';
+  coach.classList.add('show');
+}
+function tutorialAdvance(step){
+  if(!tutorialActive || tutorialStep >= step) return;
+  tutorialStep = step;
+  updateCoach();
+}
+function completeTutorial(){
+  if(!tutorialActive) return;
+  tutorialActive = false;
+  storeSet(TUT_KEY, 'done');
+  coachText.textContent = 'Nice! 🎉';
+  setTimeout(() => coach.classList.remove('show'), 1100);
+  Analytics.track('tutorial_done', { t: tms() });
+}
+
+// ---------- Pause ----------
+function setPaused(p){
+  if(!running || gameOver) return;
+  paused = p;
+  pauseScreen.classList.toggle('show', p);
+  pauseBtn.textContent = p ? '▶' : '⏸';
 }
 
 // Clamp the drop X so an orb of the given tier stays fully inside the walls.
@@ -419,10 +507,11 @@ function pointerPos(e){
   return cx * (W / rect.width);
 }
 function onMove(e){
-  if(!running) return;
+  if(!running || paused) return;
   pointerX = pointerPos(e);
   pointerActive = true;
   if(held) held.x = clampDropX(pointerX, held.tier);
+  if(tutorialActive) tutorialAdvance(1);
   e.preventDefault();
 }
 // Commit the held orb into the world (single code path for mouse / touch / keyboard).
@@ -433,11 +522,12 @@ function dropHeld(){
   totalDrops++;
   Analytics.track('orb_drop', { x:norm(o.x, W), tier:o.tier, next:nextTier, orbs:orbs.length, t:tms() });
   dropSound();
+  if(tutorialActive) tutorialAdvance(2);
   held = null;
   dropCooldown = CONFIG.dropCooldownFrames; // frames before next orb appears
 }
 function onDrop(e){
-  if(!running || !held || dropCooldown>0) return;
+  if(!running || paused || !held || dropCooldown>0) return;
   ensureAudio();
   dropHeld();
   e.preventDefault();
@@ -553,6 +643,7 @@ function mergeOrbs(a, b){
   shake = Math.min(16, 5 + nt*1.2 + mult*0.6);
   mergeSound(nt, mult - 1);
 
+  if(tutorialActive) completeTutorial();
   if(nt > highestTier) highestTier = nt;
   if(nt === MAX_TIER){
     // reaching the Star is a big celebration & bonus
@@ -639,6 +730,11 @@ function checkOverflow(){
   }
   if(over){
     overflowTimer++;
+    // pulsing warning beep + haptic as the jar nears overflow
+    if(overflowTimer > 24 && overflowTimer % 20 === 0){
+      blip(150, 0.12, 'triangle', 0.14);
+      if(navigator.vibrate) navigator.vibrate(30);
+    }
     if(overflowTimer > CONFIG.overflowGraceFrames) endGame(); // ~1.5s grace before overflow
   } else {
     overflowTimer = Math.max(0, overflowTimer - 1);
@@ -656,7 +752,9 @@ function endGame(){
   else if(score >= best && score>0) msg = 'New personal best! 🎉';
   overMsg.textContent = msg;
   overScreen.classList.add('show');
+  pauseBtn.disabled = true; restartBtn.disabled = false;
   blip(120,0.3,'sawtooth',0.18);
+  if(navigator.vibrate) navigator.vibrate([40,40,80]);
 
   Analytics.track('game_over', {
     score, max_tier:highestTier, duration_sec:Math.round(tms()/100)/10,
@@ -773,15 +871,32 @@ function render(){
   ctx.globalCompositeOperation = 'source-over';
   ctx.globalAlpha = 1;
 
-  // held orb + aim line
-  if(running && held && dropCooldown<=0){
+  // held orb + drop beam + predicted landing marker (visible from under the finger)
+  if(running && !paused && held && dropCooldown<=0){
     const t = TIERS[held.tier];
-    ctx.globalAlpha = 0.25;
-    ctx.strokeStyle = t.color; ctx.lineWidth = 2; ctx.setLineDash([5,7]);
-    ctx.beginPath(); ctx.moveTo(held.x, DROP_Y + t.r); ctx.lineTo(held.x, FLOOR); ctx.stroke();
+    const lx = held.x;
+    // predict the surface this orb would rest on (highest overlapping orb, else floor)
+    let surfaceY = FLOOR;
+    for(const o of orbs){
+      if(o.dead) continue;
+      if(Math.abs(o.x - lx) < o.r + t.r) surfaceY = Math.min(surfaceY, o.y - o.r);
+    }
+    const ghostY = surfaceY - t.r;
+    // beam down the drop lane
+    const beamW = Math.max(6, t.r*0.5);
+    const grad = ctx.createLinearGradient(0, DROP_Y, 0, surfaceY);
+    grad.addColorStop(0, t.color + '55');
+    grad.addColorStop(1, t.color + '0c');
+    ctx.fillStyle = grad;
+    ctx.fillRect(lx - beamW/2, DROP_Y + t.r, beamW, surfaceY - DROP_Y - t.r);
+    // ghost landing ring
+    ctx.globalAlpha = 0.85;
+    ctx.strokeStyle = t.color; ctx.lineWidth = 2; ctx.setLineDash([5,6]);
+    ctx.beginPath(); ctx.arc(lx, ghostY, t.r, 0, Math.PI*2); ctx.stroke();
     ctx.setLineDash([]); ctx.globalAlpha = 1;
+    // held orb
     const bob = Math.sin(frameCount*0.1)*2;
-    drawOrb(held.x, DROP_Y + bob, t.r, held.tier);
+    drawOrb(lx, DROP_Y + bob, t.r, held.tier);
   }
 
   // popups
@@ -794,14 +909,24 @@ function render(){
   }
   ctx.globalAlpha = 1;
 
-  // next preview (top-right inside canvas)
-  ctx.save();
-  ctx.globalAlpha = 0.9;
-  ctx.fillStyle = 'rgba(255,255,255,.55)';
-  ctx.font = '700 10px system-ui'; ctx.textAlign = 'right';
-  ctx.fillText('NEXT', W-16, 24);
-  drawOrb(W-30, 40, Math.min(14, TIERS[nextTier].r*0.6), nextTier, 0.95);
-  ctx.restore();
+  // overflow danger vignette — warns before the jar actually overflows
+  if(running && !paused && overflowTimer > 0){
+    const dan = Math.min(1, overflowTimer / CONFIG.overflowGraceFrames);
+    const vg = ctx.createRadialGradient(W/2, H/2, H*0.28, W/2, H/2, H*0.62);
+    vg.addColorStop(0, 'rgba(255,60,90,0)');
+    vg.addColorStop(1, 'rgba(255,40,70,'+(dan*0.55)+')');
+    ctx.fillStyle = vg;
+    ctx.fillRect(0,0,W,H);
+  }
+
+  // tutorial pointer finger
+  if(running && tutorialActive){
+    const fx = tutorialStep === 0 ? (W/2 + Math.sin(frameCount*0.06)*70) : (held ? held.x : W/2);
+    const fy = DROP_Y + 48 + Math.sin(frameCount*0.12)*4;
+    ctx.globalAlpha = 0.95; ctx.font = '30px serif'; ctx.textAlign = 'center';
+    ctx.fillText('👆', fx, fy);
+    ctx.globalAlpha = 1;
+  }
 
   ctx.restore();
 }
@@ -817,13 +942,13 @@ function loop(ts){
   acc += dtMs;
   while(acc >= DT){
     frameCount++;
-    if(running){
+    if(running && !paused){
       if(dropCooldown>0){ dropCooldown--; if(dropCooldown===0 && !held) newHeld(); }
       stepPhysics();
       updateCombo();
       checkOverflow();
+      updateEffects();
     }
-    updateEffects();
     acc -= DT;
   }
   render();
@@ -837,9 +962,18 @@ function startGame(){
   score = 0; scoreEl.textContent = '0';
   gameOver = false; running = true; overflowTimer = 0; highestTier = 0;
   held = null; nextTier = randSpawnTier(); dropCooldown = 0;
+  updateNextUI();
   newHeld();
   startScreen.classList.remove('show');
   overScreen.classList.remove('show');
+  pauseScreen.classList.remove('show');
+  paused = false; pauseBtn.textContent = '⏸';
+  pauseBtn.disabled = false; restartBtn.disabled = false;
+
+  // first-run tutorial
+  tutorialActive = (storeGet(TUT_KEY) !== 'done');
+  tutorialStep = 0;
+  updateCoach();
 
   // ---- analytics: new session/game ----
   const gamesPlayed = parseInt(storeGet(GAMES_KEY) || '0', 10) || 0;
@@ -856,9 +990,18 @@ function startGame(){
 document.getElementById('playBtn').addEventListener('click', startGame);
 document.getElementById('againBtn').addEventListener('click', startGame);
 
-// keyboard: space/click to drop, arrows to nudge
+// HUD controls
+pauseBtn.addEventListener('click', () => setPaused(!paused));
+resumeBtn.addEventListener('click', () => setPaused(false));
+restartBtn.addEventListener('click', startGame);
+restartBtn2.addEventListener('click', startGame);
+coachSkip.addEventListener('click', completeTutorial);
+
+// keyboard: space/click to drop, arrows to nudge, P/Esc to pause
 window.addEventListener('keydown', (e)=>{
   if(!running) { if(e.code==='Space'||e.code==='Enter'){ startGame(); } return; }
+  if(e.code==='KeyP' || e.code==='Escape'){ setPaused(!paused); return; }
+  if(paused) return;
   if(e.code==='ArrowLeft'){ pointerX -= 18; if(held) held.x = clampDropX(pointerX, held.tier); }
   if(e.code==='ArrowRight'){ pointerX += 18; if(held) held.x = clampDropX(pointerX, held.tier); }
   if(e.code==='Space' && held && dropCooldown<=0){
@@ -867,7 +1010,10 @@ window.addEventListener('keydown', (e)=>{
 });
 
 // Expose config + analytics for inspection/tuning (e.g. window.OrbitMerge.analytics.log())
-window.OrbitMerge = { config: CONFIG, analytics: Analytics };
+window.OrbitMerge = {
+  config: CONFIG, analytics: Analytics,
+  state: () => ({ running, paused, gameOver, orbs: orbs.length, score, tutorialActive, tutorialStep }),
+};
 
 fitCanvas();
 requestAnimationFrame(loop);
