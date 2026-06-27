@@ -86,6 +86,22 @@
   .mc-name{ font-size:20px; font-weight:800; }
   .mc-desc{ font-size:12px; color:var(--muted); margin-top:3px; }
   .modecard.surv{ border-color:rgba(255,93,115,.35); background:linear-gradient(100deg, rgba(255,93,115,.12), rgba(255,255,255,.05)); }
+  .modecard.daily{ border-color:rgba(95,214,166,.35); background:linear-gradient(100deg, rgba(95,214,166,.12), rgba(255,255,255,.05)); }
+  .streakline{ font-size:14px; font-weight:700; color:var(--accent); min-height:18px; }
+  .streakline .muted{ color:var(--muted); font-weight:600; }
+  /* Stats screen */
+  #statsScreen.show{ display:flex !important; }
+  .statgrid{ display:grid; grid-template-columns:repeat(2,1fr); gap:10px; width:100%; }
+  .statcard{ background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.1); border-radius:12px; padding:10px 12px; }
+  .statcard .k{ font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:1px; }
+  .statcard .v{ font-size:20px; font-weight:800; }
+  .achlist{ display:flex; flex-direction:column; gap:8px; width:100%; max-height:38vh; overflow-y:auto; }
+  .ach{ display:flex; align-items:center; gap:12px; background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.08);
+    border-radius:12px; padding:9px 12px; opacity:.45; }
+  .ach.got{ opacity:1; border-color:rgba(255,212,94,.4); background:rgba(255,212,94,.08); }
+  .ach .ai{ font-size:24px; }
+  .ach .an{ font-weight:800; font-size:14px; }
+  .ach .ad{ font-size:11px; color:var(--muted); }
 
   .hint{ font-size:12px; color:var(--muted); margin-top:2px; text-align:center; max-width:440px; }
   footer{ font-size:11px; color:var(--muted); opacity:.8; margin-top:auto; padding-bottom:4px; }
@@ -107,17 +123,30 @@
 
   <!-- MODE SELECT -->
   <div id="modeSelect" class="show">
-    <h2>Choose a mode</h2>
+    <div class="streakline" id="streakLine"></div>
     <div class="modes">
+      <button class="modecard daily" id="modeDaily">
+        <div class="mc-ico">📅</div>
+        <div><div class="mc-name">Daily Challenge</div><div class="mc-desc" id="dailyDesc">One lava run, same for everyone today.</div></div>
+      </button>
       <button class="modecard" id="modePuzzle">
         <div class="mc-ico">🧩</div>
-        <div><div class="mc-name">Puzzles</div><div class="mc-desc">12 hand-made levels — plan your moves</div></div>
+        <div><div class="mc-name">Puzzles</div><div class="mc-desc" id="puzzleDesc">12 hand-made levels — plan your moves</div></div>
       </button>
       <button class="modecard surv" id="modeSurv">
         <div class="mc-ico">🌋</div>
         <div><div class="mc-name">Survival</div><div class="mc-desc">Outrun the rising lava — merge to cool it. Best: <b id="bestSurv">0</b></div></div>
       </button>
     </div>
+    <button class="ghost" id="statsBtn" style="margin-top:4px;">🏆 Stats &amp; Achievements</button>
+  </div>
+
+  <!-- STATS / ACHIEVEMENTS -->
+  <div id="statsScreen" style="display:none; width:100%; max-width:460px; flex-direction:column; align-items:center; gap:12px;">
+    <h2 style="margin:6px 0 0; font-size:22px;">Stats &amp; Achievements</h2>
+    <div class="statgrid" id="statGrid"></div>
+    <div class="achlist" id="achList"></div>
+    <button class="cta" id="statsBack" style="margin-top:6px;">Back</button>
   </div>
 
   <!-- LEVEL SELECT -->
@@ -278,6 +307,58 @@ let lava = 0;            // 0..1 — fraction of the well filled by lava
 let lavaT = 0;           // frames survived (drives acceleration)
 let bestSurvival = parseInt(storeGet('orbitmerge.survival')||'0',10) || 0;
 const SURV = { pool:[0,0,1,1,2], riseBase:0.00085, accelFrames:2400, cool:(nt,combo)=>0.05 + nt*0.018 + (combo-1)*0.025 };
+let isDaily = false;     // current survival run is the Daily Challenge
+let runMaxTier = 0, runMaxChain = 0; // per-run stats for achievements
+
+// ---------- retention profile (Stage 4) ----------
+function loadProf(){
+  let p; try{ p = JSON.parse(storeGet('orbitmerge.prof')||''); }catch(e){ p=null; }
+  if(!p||typeof p!=='object') p = {};
+  return Object.assign({ lastDay:0, streak:0, bestStreak:0, daily:{day:-1,best:0},
+    bestTier:0, bestChain:0, bestSurvTime:0, plays:0, ach:{} }, p);
+}
+let prof = loadProf();
+function saveProf(){ storeSet('orbitmerge.prof', JSON.stringify(prof)); }
+const todayNum = () => Math.floor(Date.now()/86400000);
+function registerPlayDay(){
+  const d = todayNum();
+  if(prof.lastDay === d) return;
+  prof.streak = (prof.lastDay === d-1) ? prof.streak+1 : 1;
+  prof.lastDay = d;
+  if(prof.streak > prof.bestStreak) prof.bestStreak = prof.streak;
+  prof.plays++;
+  saveProf();
+  checkAch();
+}
+
+// ---------- achievements ----------
+const ACH = [
+  { id:'firstSolve', icon:'🧩', name:'First Steps',   desc:'Solve any level',          test:s=>s.solved>=1 },
+  { id:'tenStars',   icon:'⭐', name:'Star Collector', desc:'Earn 12 stars total',      test:s=>s.stars>=12 },
+  { id:'allLevels',  icon:'🏅', name:'Completionist',  desc:'Solve all 12 levels',      test:s=>s.solved>=12 },
+  { id:'perfect',    icon:'💯', name:'Flawless',       desc:'3-star a level',           test:s=>s.maxStars>=3 },
+  { id:'bigMerge',   icon:'🔮', name:'Big Merge',      desc:'Make an 8',                test:s=>s.bestTier>=7 },
+  { id:'chain5',     icon:'⚡', name:'Chain Reaction', desc:'Pull off a 5-chain',       test:s=>s.bestChain>=5 },
+  { id:'surv30',     icon:'🌋', name:'Heatproof',      desc:'Survive 30s',              test:s=>s.bestSurvTime>=30 },
+  { id:'surv60',     icon:'🛡️', name:'Lava Walker',    desc:'Survive 60s',              test:s=>s.bestSurvTime>=60 },
+  { id:'streak3',    icon:'🔥', name:'On a Roll',      desc:'3-day streak',             test:s=>s.bestStreak>=3 },
+  { id:'streak7',    icon:'📅', name:'Dedicated',      desc:'7-day streak',             test:s=>s.bestStreak>=7 },
+];
+function statsSnapshot(){
+  const solved = Object.keys(progress.stars||{}).length;
+  const stars = Object.values(progress.stars||{}).reduce((a,b)=>a+b,0);
+  const maxStars = Math.max(0, ...Object.values(progress.stars||{}), 0);
+  return { solved, stars, maxStars, bestTier:prof.bestTier, bestChain:prof.bestChain,
+           bestSurvTime:prof.bestSurvTime, bestStreak:prof.bestStreak, bestSurvival };
+}
+function checkAch(){
+  const s = statsSnapshot();
+  for(const a of ACH){ if(!prof.ach[a.id] && a.test(s)){ prof.ach[a.id]=true; saveProf(); achToast(a); } }
+}
+function achToast(a){
+  spawnPop(W/2, gridY+40, '🏆 '+a.name, '#ffd45e');
+  blip(880,0.1,'triangle',0.16); setTimeout(()=>blip(1175,0.14,'triangle',0.14),100);
+}
 
 function mkRng(seed){ let s = seed>>>0 || 1; return ()=>{ s=(s*1664525+1013904223)>>>0; return s/4294967296; }; }
 function drawTier(){ return level.pool[Math.floor(rng()*level.pool.length)]; }
@@ -285,6 +366,7 @@ function drawTier(){ return level.pool[Math.floor(rng()*level.pool.length)]; }
 // ---------- start / build level ----------
 function startLevel(lv){
   gen++;                 // invalidate any pending cascade timers from a prior run
+  registerPlayDay(); runMaxTier=0; runMaxChain=0;
   mode = 'puzzle';
   level = lv;
   rng = mkRng(lv.seed);
@@ -300,11 +382,13 @@ function startLevel(lv){
   updateHUD();
 }
 
-function startSurvival(){
+function startSurvival(daily){
   gen++;
+  registerPlayDay(); runMaxTier=0; runMaxChain=0;
+  isDaily = !!daily;
   mode = 'survival';
-  level = { id:'∞', pool:SURV.pool, goal:null, moves:Infinity, stones:[] };
-  rng = Math.random;                 // survival doesn't need determinism
+  level = { id: daily?'Daily':'∞', pool:SURV.pool, goal:null, moves:Infinity, stones:[] };
+  rng = daily ? mkRng(todayNum()*7919 + 17) : Math.random; // daily = same run for everyone today
   grid = emptyGrid();
   moves = Infinity; score = 0;
   lava = 0; lavaT = 0;
@@ -403,6 +487,7 @@ function resolveBoard(dropCol){
     if(!m){ finishResolve(); return; }
     combo++;
     const t=m.tier, nt=Math.min(MAX_TIER, t+1);
+    if(nt>runMaxTier) runMaxTier=nt; if(combo>runMaxChain) runMaxChain=combo;
     // anchor = lowest cell, tiebreak nearest the drop column
     let anchor=m.cells[0];
     for(const cl of m.cells){ if(cl[0]>anchor[0] || (cl[0]===anchor[0] && Math.abs(cl[1]-dropCol)<Math.abs(anchor[1]-dropCol))) anchor=cl; }
@@ -468,6 +553,9 @@ function win(){
   if(stars>prev) progress.stars[level.id]=stars;
   if(level.id+1 > progress.unlocked && level.id < LEVELS.length) progress.unlocked = level.id+1;
   saveProgress();
+  if(runMaxTier>prof.bestTier) prof.bestTier=runMaxTier;
+  if(runMaxChain>prof.bestChain) prof.bestChain=runMaxChain;
+  saveProf(); checkAch();
   winStars.textContent = '★★★☆☆☆'.slice(3-stars, 6-stars);
   winMsg.textContent = stars===3 ? 'Flawless — three stars!' : (stars===2 ? 'Solved! Can you do it in fewer moves?' : 'Solved on the wire!');
   document.getElementById('winNext').classList.toggle('hidden', level.id>=LEVELS.length);
@@ -485,10 +573,21 @@ function lose(){
 function gameOver(reason){      // survival
   if(state==='lose') return;
   state='lose';
-  if(score>bestSurvival){ bestSurvival=score; storeSet('orbitmerge.survival', String(bestSurvival)); }
+  const isBest = score>bestSurvival;
+  if(isBest){ bestSurvival=score; storeSet('orbitmerge.survival', String(bestSurvival)); }
+  // retention stats + daily best
+  const survSec = Math.round(lavaT/60);
+  if(survSec>prof.bestSurvTime) prof.bestSurvTime=survSec;
+  if(runMaxTier>prof.bestTier) prof.bestTier=runMaxTier;
+  if(runMaxChain>prof.bestChain) prof.bestChain=runMaxChain;
+  let dailyLine = '';
+  if(isDaily){ const d=todayNum(); if(prof.daily.day!==d) prof.daily={day:d,best:0}; if(score>prof.daily.best) prof.daily.best=score;
+    dailyLine = '<br>Today\'s Daily best: <b>'+prof.daily.best+'</b>'; }
+  saveProf(); checkAch();
   loseTitle.textContent = reason==='meltdown' ? '🌋 Meltdown!' : 'Jammed!';
-  document.getElementById('loseMsg').innerHTML = 'Score <b style="color:var(--accent)">'+score+'</b> · Best '+bestSurvival +
-    (score>=bestSurvival && score>0 ? ' 🎉' : '');
+  document.getElementById('loseMsg').innerHTML = (isDaily?'<b style="color:var(--accent)">Daily Challenge</b><br>':'') +
+    'Score <b style="color:var(--accent)">'+score+'</b> · '+survSec+'s · Best '+bestSurvival +
+    (isBest && score>0 ? ' 🎉' : '') + dailyLine;
   loseRetry.textContent = 'Again'; loseMenu.textContent = 'Modes';
   burst(W/2, gridY+gridH-20, '#ff7043', 80);
   shake = 20;
@@ -636,26 +735,60 @@ function buildLevelSelect(){
     levelGrid.appendChild(el);
   });
 }
+const statsScreen = document.getElementById('statsScreen');
 function hideAll(){ state='menu'; gameWrap.classList.add('hidden'); winScreen.classList.remove('show'); loseScreen.classList.remove('show');
-  modeSelect.classList.remove('show'); levelSelect.classList.remove('show'); }
-function showModes(){ hideAll(); document.getElementById('bestSurv').textContent = bestSurvival; modeSelect.classList.add('show'); }
+  modeSelect.classList.remove('show'); levelSelect.classList.remove('show'); statsScreen.classList.remove('show'); }
+function showModes(){
+  hideAll();
+  document.getElementById('bestSurv').textContent = bestSurvival;
+  // streak + daily status
+  const playedToday = prof.lastDay===todayNum();
+  const sl = document.getElementById('streakLine');
+  sl.innerHTML = prof.streak>0
+    ? `🔥 ${prof.streak}-day streak <span class="muted">· best ${prof.bestStreak}</span>`
+    : `<span class="muted">Play daily to build a streak 🔥</span>`;
+  const dailyDoneToday = prof.daily.day===todayNum();
+  document.getElementById('dailyDesc').innerHTML = dailyDoneToday
+    ? `Today\'s best: <b>${prof.daily.best}</b> · play again to beat it`
+    : `One lava run, same for everyone today.`;
+  const solved = Object.keys(progress.stars||{}).length;
+  document.getElementById('puzzleDesc').textContent = solved>0 ? `${solved}/12 solved · plan your moves` : '12 hand-made levels — plan your moves';
+  modeSelect.classList.add('show');
+}
 function showLevels(){ hideAll(); buildLevelSelect(); levelSelect.classList.add('show'); }
+function showStats(){
+  hideAll();
+  const s = statsSnapshot();
+  const cards = [['Day streak', prof.streak+' 🔥'],['Best streak', prof.bestStreak],['Levels solved', s.solved+'/12'],
+    ['Stars', s.stars],['Best survival', bestSurvival],['Longest survive', s.bestSurvTime+'s'],
+    ['Biggest orb', s.bestTier?(s.bestTier+1):'—'],['Best chain', s.bestChain?('x'+s.bestChain):'—']];
+  document.getElementById('statGrid').innerHTML = cards.map(([k,v])=>`<div class="statcard"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
+  document.getElementById('achList').innerHTML = ACH.map(a=>{
+    const got = !!prof.ach[a.id];
+    return `<div class="ach${got?' got':''}"><div class="ai">${got?a.icon:'🔒'}</div><div><div class="an">${a.name}</div><div class="ad">${a.desc}</div></div></div>`;
+  }).join('');
+  statsScreen.classList.add('show');
+}
 
+document.getElementById('modeDaily').addEventListener('click', ()=>{ ensureAudio(); startSurvival(true); });
 document.getElementById('modePuzzle').addEventListener('click', ()=>{ ensureAudio(); showLevels(); });
-document.getElementById('modeSurv').addEventListener('click', ()=>{ ensureAudio(); startSurvival(); });
+document.getElementById('modeSurv').addEventListener('click', ()=>{ ensureAudio(); startSurvival(false); });
+document.getElementById('statsBtn').addEventListener('click', showStats);
+document.getElementById('statsBack').addEventListener('click', showModes);
 document.getElementById('homeBtn').addEventListener('click', showModes);
 document.getElementById('winRetry').addEventListener('click', ()=>startLevel(level));
 document.getElementById('winNext').addEventListener('click', ()=>{ const nx=LEVELS.find(l=>l.id===level.id+1); if(nx) startLevel(nx); else showLevels(); });
-loseRetry.addEventListener('click', ()=>{ mode==='survival' ? startSurvival() : startLevel(level); });
+loseRetry.addEventListener('click', ()=>{ mode==='survival' ? startSurvival(isDaily) : startLevel(level); });
 loseMenu.addEventListener('click', ()=>{ mode==='survival' ? showModes() : showLevels(); });
 
 // expose for testing
 window.OrbitPuzzle = {
   state:()=>({ state, mode, moves, score, busy, lava:Math.round(lava*100), maxTier:maxTierOnBoard(), stones:stoneCount(),
                win: winScreen.classList.contains('show'), lose: loseScreen.classList.contains('show') }),
-  drop:(c)=>tryDrop(c), start:(id)=>startLevel(LEVELS.find(l=>l.id===id)||LEVELS[0]), survival:()=>startSurvival(),
-  levels:LEVELS, COLS, ROWS, current:()=>current, dropRow:(c)=>dropRow(c),
+  drop:(c)=>tryDrop(c), start:(id)=>startLevel(LEVELS.find(l=>l.id===id)||LEVELS[0]),
+  survival:(d)=>startSurvival(d), levels:LEVELS, COLS, ROWS, current:()=>current, dropRow:(c)=>dropRow(c),
   grid:()=>grid.map(row=>row.map(o=>o?(o.stone?{stone:1}:{tier:o.tier}):null)),
+  prof:()=>prof, isDaily:()=>isDaily, ach:()=>ACH.map(a=>({id:a.id,got:!!prof.ach[a.id]})),
 };
 
 showModes();

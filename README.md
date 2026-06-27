@@ -7,8 +7,14 @@ A casual **merge** game on a deterministic grid, with two modes:
 - **🌋 Survival** — lava rises in real time and only your merges cool it. Stand
   still and you melt down; survive as long as you can for a high score.
 
+- **📅 Daily Challenge** — a Survival run seeded by the date, so everyone gets the
+  same run today; chase your daily best.
+
 Connect 2+ of the same number and they merge into the next one (chains score more).
-The board only changes when *you* act — neither mode can play itself.
+The board only changes when *you* act — no mode can play itself.
+
+A **day-streak**, **achievements**, and a **Stats** screen give reasons to come
+back — all saved locally.
 
 ## Play
 
