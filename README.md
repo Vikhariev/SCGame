@@ -7,6 +7,8 @@ A casual **merge** game on a deterministic grid, with two modes:
 - **🌋 Survival** — lava rises in real time and only your merges cool it. Stand
   still and you melt down; survive as long as you can for a high score.
 
+- **💎 Match-3** — a juicy gem board: swap two neighbouring gems to line up 3+ of
+  the same shape/colour, set off cascading chains, and score before your moves run out.
 - **📅 Daily Challenge** — a Survival run seeded by the date, so everyone gets the
   same run today; chase your daily best.
 

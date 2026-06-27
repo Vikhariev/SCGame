@@ -95,6 +95,7 @@
   .modecard.surv{ border-color:rgba(255,93,115,.35); background:linear-gradient(100deg, rgba(255,93,115,.12), rgba(255,255,255,.05)); }
   .modecard.daily{ border-color:rgba(95,214,166,.35); background:linear-gradient(100deg, rgba(95,214,166,.12), rgba(255,255,255,.05)); }
   .modecard.cont{ border-color:rgba(255,212,94,.45); background:linear-gradient(100deg, rgba(255,212,94,.14), rgba(255,255,255,.05)); }
+  .modecard.m3{ border-color:rgba(184,134,255,.4); background:linear-gradient(100deg, rgba(184,134,255,.12), rgba(82,199,255,.08)); }
   .streakline{ font-size:14px; font-weight:700; color:var(--accent); min-height:18px; }
   .streakline .muted{ color:var(--muted); font-weight:600; }
   /* Stats screen */
@@ -148,6 +149,10 @@
       <button class="modecard surv" id="modeSurv">
         <div class="mc-ico">🌋</div>
         <div><div class="mc-name">Survival</div><div class="mc-desc">Outrun the rising lava — merge to cool it. Best: <b id="bestSurv">0</b></div></div>
+      </button>
+      <button class="modecard m3" id="modeM3">
+        <div class="mc-ico">💎</div>
+        <div><div class="mc-name">Match-3</div><div class="mc-desc">Swap gems, line up 3+, chain juicy cascades. Best: <b id="bestM3">0</b></div></div>
       </button>
     </div>
     <button class="ghost" id="statsBtn" style="margin-top:4px;">🏆 Stats &amp; Achievements</button>
@@ -300,6 +305,16 @@ function cellCX(c){ return gridX + c*cell + cell/2; }
 function cellCY(r){ return gridY + r*cell + cell/2; }
 const ORB_R = Math.floor(cell*0.42);
 
+// Match-3 board layout (square, centred)
+const M3C = 7, M3R = 7;
+const m3cell = Math.floor(Math.min((W-28)/M3C, (H-TOP-14)/M3R));
+const m3W = m3cell*M3C, m3H = m3cell*M3R;
+const m3X = Math.round((W - m3W)/2);
+const m3Y = TOP + Math.round((H - TOP - 14 - m3H)/2);
+const m3cx = c => m3X + c*m3cell + m3cell/2;
+const m3cy = r => m3Y + r*m3cell + m3cell/2;
+const GEM_R = Math.floor(m3cell*0.40);
+
 // ---------- game state ----------
 let level = null;
 function emptyGrid(){ const g=[]; for(let r=0;r<ROWS;r++){ const row=[]; for(let c=0;c<COLS;c++) row.push(null); g.push(row); } return g; }
@@ -320,6 +335,19 @@ let bestSurvival = parseInt(storeGet('orbitmerge.survival')||'0',10) || 0;
 const SURV = { pool:[0,0,1,1,2], riseBase:0.00085, accelFrames:2400, cool:(nt,combo)=>0.05 + nt*0.018 + (combo-1)*0.025 };
 let isDaily = false;     // current survival run is the Daily Challenge
 let runMaxTier = 0, runMaxChain = 0; // per-run stats for achievements
+
+// ---------- Match-3 mode ----------
+const GEMS = [
+  { c:'#ff5d73', g:'#c41e3a', shape:'circle'   },
+  { c:'#ff9f3c', g:'#d4720e', shape:'diamond'  },
+  { c:'#ffd84d', g:'#e0a800', shape:'rsquare'  },
+  { c:'#5fd6a6', g:'#2fa06a', shape:'triangle' },
+  { c:'#52c7ff', g:'#1e7ad4', shape:'hex'      },
+  { c:'#b886ff', g:'#7a3ddf', shape:'star'     },
+];
+const NGEM = 6, M3MOVES = 25; // M3C/M3R declared with the layout consts (used there)
+let m3 = [], m3sel = null, m3moves = 0, m3score = 0, m3busy = false;
+let m3best = parseInt(storeGet('orbitmerge.m3')||'0',10) || 0;
 
 // ---------- retention profile (Stage 4) ----------
 function loadProf(){
@@ -445,6 +473,14 @@ function goalString(g){
   return '';
 }
 function updateHUD(){
+  if(mode==='match3'){
+    goalText.innerHTML = '<span class="lvtag">💎</span> Match 3+ to score';
+    movesLab.textContent = 'Moves'; movesVal.textContent = m3moves; movesVal.classList.toggle('low', m3moves<=3);
+    scoreVal.textContent = m3score;
+    hintText.textContent = 'Tap two neighbouring gems to swap — line up 3+ to clear. Chains score big!';
+    return;
+  }
+  hintText.textContent = (mode==='survival') ? 'Merge fast to cool the lava — it only rises.' : 'Tap a column to drop. Connect 2+ of the same to merge up.';
   if(mode==='survival'){
     goalText.innerHTML = '<span class="lvtag">🌋</span> Survive the lava';
     movesLab.textContent = 'Heat';
@@ -657,12 +693,156 @@ function updateFx(){
   for(const r of rings){ r.r+=(r.maxR-r.r)*0.2; r.life-=0.05*r.speed; }
   rings=rings.filter(r=>r.life>0);
   if(shake>0.3) shake*=0.85; else shake=0;
-  // ease orb fall + pop
+  if(mode==='match3'){
+    // ease gems toward their cell positions (swap / fall / refill)
+    for(let r=0;r<M3R;r++) for(let c=0;c<M3C;c++){ const g=m3[r] && m3[r][c]; if(!g) continue;
+      const tx=m3cx(c), ty=m3cy(r);
+      g.px += (tx-g.px)*0.4; g.py += (ty-g.py)*0.4;
+      if(g.pop>0) g.pop=Math.max(0,g.pop-0.1);
+    }
+    return;
+  }
+  // ease orb fall + pop (merge modes)
   for(let r=0;r<ROWS;r++) for(let c=0;c<COLS;c++){ const o=grid[r][c]; if(o&&!o.stone){
     const ty=cellCY(r); if(o.py===undefined) o.py=ty; o.py+=(ty-o.py)*0.4; if(o.pop>0) o.pop=Math.max(0,o.pop-0.08); } }
 }
 
+// ---------- Match-3 ----------
+function m3MakeGem(g,r,c,startPy){ return { g, px:m3cx(c), py:(startPy!==undefined?startPy:m3cy(r)), pop:0 }; }
+function m3RandG(){ return Math.floor(Math.random()*NGEM); }
+function m3NewBoard(){
+  m3=[];
+  for(let r=0;r<M3R;r++){ const row=[]; for(let c=0;c<M3C;c++){
+    let g; do{ g=m3RandG(); } while( (c>=2 && row[c-1].g===g && row[c-2].g===g) || (r>=2 && m3[r-1][c].g===g && m3[r-2][c].g===g) );
+    row.push(m3MakeGem(g,r,c)); } m3.push(row); }
+}
+function m3FindMatches(){
+  const clear=new Set();
+  for(let r=0;r<M3R;r++){ let c=0; while(c<M3C){ const g=m3[r][c]&&m3[r][c].g; let k=c+1;
+    while(k<M3C && m3[r][k] && m3[r][k].g===g) k++; if(g!=null && k-c>=3) for(let i=c;i<k;i++) clear.add(r*M3C+i); c=k; } }
+  for(let c=0;c<M3C;c++){ let r=0; while(r<M3R){ const g=m3[r][c]&&m3[r][c].g; let k=r+1;
+    while(k<M3R && m3[k][c] && m3[k][c].g===g) k++; if(g!=null && k-r>=3) for(let i=r;i<k;i++) clear.add(i*M3C+c); r=k; } }
+  return clear;
+}
+function m3Gravity(){
+  for(let c=0;c<M3C;c++){
+    let write=M3R-1;
+    for(let r=M3R-1;r>=0;r--){ if(m3[r][c]){ if(write!==r){ m3[write][c]=m3[r][c]; m3[r][c]=null; } write--; } }
+    // fill empties at the top with new gems falling in from above
+    let above=1;
+    for(let r=write;r>=0;r--){ m3[r][c]=m3MakeGem(m3RandG(), r, c, m3Y - above*m3cell); above++; }
+  }
+}
+function m3Resolve(){
+  m3busy=true; let combo=0;
+  function step(){
+    if(mode!=='match3') { m3busy=false; return; }
+    const clear=m3FindMatches();
+    if(clear.size===0){ m3busy=false; m3AfterResolve(); return; }
+    combo++;
+    let sx=0, sy=0, n=0;
+    clear.forEach(idx=>{ const r=Math.floor(idx/M3C), c=idx%M3C, gem=m3[r][c];
+      if(gem){ burst(m3cx(c),m3cy(r), GEMS[gem.g].c, 12); sx+=m3cx(c); sy+=m3cy(r); n++; m3[r][c]=null; } });
+    const gained = clear.size*10*combo;
+    m3score += gained;
+    if(n){ spawnPop(sx/n, sy/n-12, '+'+gained, '#ffd45e');
+      rings.push({x:sx/n,y:sy/n,r:8,maxR:m3cell*1.6,color:'#ffffff',life:1,speed:2.2});
+      if(combo>=2) spawnPop(sx/n, sy/n-32, 'COMBO x'+combo, ['#ffd45e','#ffae3c','#ff7a3c','#ff5d73','#ff3dc0'][Math.min(combo-2,4)]); }
+    shake=Math.min(14,3+combo*1.6);
+    mergeSound(Math.min(9,2+combo), combo-1);
+    m3Gravity();
+    updateHUD();
+    setTimeout(step, 165);
+  }
+  setTimeout(step, 110);
+}
+function m3AfterResolve(){
+  if(m3moves<=0) m3GameOver();
+}
+function m3TrySwap(a,b){
+  const ga=m3[a.r][a.c], gb=m3[b.r][b.c];
+  if(!ga||!gb) return;
+  // visual: nudge each toward the other's cell (so a failed swap bounces back)
+  ga.px=m3cx(b.c); ga.py=m3cy(b.r); gb.px=m3cx(a.c); gb.py=m3cy(a.r);
+  m3[a.r][a.c]=gb; m3[b.r][b.c]=ga;
+  if(m3FindMatches().size>0){ m3moves--; updateHUD(); dropSound(); m3Resolve(); }
+  else { m3[a.r][a.c]=ga; m3[b.r][b.c]=gb; blip(150,0.08,'square',0.12); } // revert (gems ease back)
+}
+function m3CellFromXY(clientX,clientY){
+  const rect=canvas.getBoundingClientRect();
+  const x=(clientX-rect.left)*(W/rect.width), y=(clientY-rect.top)*(H/rect.height);
+  if(x<m3X||x>=m3X+m3W||y<m3Y||y>=m3Y+m3H) return null;
+  return { c:Math.floor((x-m3X)/m3cell), r:Math.floor((y-m3Y)/m3cell) };
+}
+function m3Pointer(clientX,clientY){
+  if(mode!=='match3'||state!=='play'||m3busy) return;
+  const cell=m3CellFromXY(clientX,clientY); if(!cell) return;
+  if(!m3sel){ m3sel=cell; blip(330,0.05,'sine',0.08); return; }
+  if(m3sel.r===cell.r && m3sel.c===cell.c){ m3sel=null; return; }
+  if(Math.abs(m3sel.r-cell.r)+Math.abs(m3sel.c-cell.c)===1){ const a=m3sel; m3sel=null; m3TrySwap(a,cell); }
+  else { m3sel=cell; blip(330,0.05,'sine',0.08); }
+}
+function startMatch3(){
+  gen++; registerPlayDay();
+  mode='match3'; m3sel=null; m3moves=M3MOVES; m3score=0; m3busy=false;
+  m3NewBoard();
+  particles=[]; rings=[]; popups=[]; shake=0;
+  state='play';
+  hideAll(); gameWrap.classList.remove('hidden'); updateHUD();
+}
+function m3GameOver(){
+  if(state==='lose') return;
+  state='lose';
+  if(m3score>m3best){ m3best=m3score; storeSet('orbitmerge.m3', String(m3best)); }
+  loseTitle.textContent='💎 Out of moves';
+  document.getElementById('loseMsg').innerHTML='Score <b style="color:var(--accent)">'+m3score+'</b> · Best '+m3best + (m3score>=m3best&&m3score>0?' 🎉':'');
+  loseRetry.textContent='Again'; loseMenu.textContent='Modes';
+  setTimeout(()=>loseScreen.classList.add('show'), 250);
+  blip(160,0.3,'sawtooth',0.16);
+}
+function gemPath(x,y,r,shape){
+  if(shape==='circle'){ ctx.beginPath(); ctx.arc(x,y,r,0,6.2832); }
+  else if(shape==='diamond'){ ctx.beginPath(); ctx.moveTo(x,y-r); ctx.lineTo(x+r,y); ctx.lineTo(x,y+r); ctx.lineTo(x-r,y); ctx.closePath(); }
+  else if(shape==='rsquare'){ const s=r*0.92; roundRect(x-s,y-s,s*2,s*2,r*0.36); }
+  else if(shape==='triangle'){ ctx.beginPath(); ctx.moveTo(x,y-r); ctx.lineTo(x+r*0.92,y+r*0.72); ctx.lineTo(x-r*0.92,y+r*0.72); ctx.closePath(); }
+  else if(shape==='hex'){ ctx.beginPath(); for(let i=0;i<6;i++){ const a=Math.PI/6+i*Math.PI/3, px=x+Math.cos(a)*r, py=y+Math.sin(a)*r; i?ctx.lineTo(px,py):ctx.moveTo(px,py); } ctx.closePath(); }
+  else { ctx.beginPath(); for(let i=0;i<10;i++){ const a=-Math.PI/2+i*Math.PI/5, rr=(i%2?r*0.46:r), px=x+Math.cos(a)*rr, py=y+Math.sin(a)*rr; i?ctx.lineTo(px,py):ctx.moveTo(px,py); } ctx.closePath(); }
+}
+function drawGem(x,y,r,gi){
+  const G=GEMS[gi]; ctx.save(); ctx.shadowColor=G.g; ctx.shadowBlur=12;
+  const grd=ctx.createRadialGradient(x-r*0.35,y-r*0.4,r*0.12,x,y,r);
+  grd.addColorStop(0,'#ffffff'); grd.addColorStop(0.4,G.c); grd.addColorStop(1,G.g);
+  ctx.fillStyle=grd; gemPath(x,y,r,G.shape); ctx.fill(); ctx.shadowBlur=0;
+  ctx.globalAlpha=0.6; ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(x-r*0.3,y-r*0.34,r*0.16,0,6.2832); ctx.fill(); ctx.globalAlpha=1;
+  ctx.restore();
+}
+function renderM3(){
+  ctx.clearRect(0,0,W,H); ctx.save();
+  if(shake>0) ctx.translate((Math.random()-.5)*shake,(Math.random()-.5)*shake);
+  // board frame + cells
+  ctx.fillStyle='rgba(255,255,255,.04)'; roundRect(m3X-6,m3Y-6,m3W+12,m3H+12,14); ctx.fill();
+  ctx.strokeStyle='rgba(255,255,255,.05)'; ctx.lineWidth=1;
+  for(let c=0;c<=M3C;c++){ ctx.beginPath(); ctx.moveTo(m3X+c*m3cell,m3Y); ctx.lineTo(m3X+c*m3cell,m3Y+m3H); ctx.stroke(); }
+  for(let r=0;r<=M3R;r++){ ctx.beginPath(); ctx.moveTo(m3X,m3Y+r*m3cell); ctx.lineTo(m3X+m3W,m3Y+r*m3cell); ctx.stroke(); }
+  // selection highlight (pulsing)
+  if(m3sel){ const p=0.5+0.3*Math.sin(frameTick*0.18); ctx.fillStyle='rgba(255,255,255,'+(0.10+p*0.12)+')';
+    roundRect(m3X+m3sel.c*m3cell+2, m3Y+m3sel.r*m3cell+2, m3cell-4, m3cell-4, 9); ctx.fill(); }
+  // gems (clip to board so falling gems appear from the top edge)
+  ctx.save(); roundRect(m3X-2,m3Y-2,m3W+4,m3H+4,12); ctx.clip();
+  for(let r=0;r<M3R;r++) for(let c=0;c<M3C;c++){ const g=m3[r][c]; if(g) drawGem(g.px,g.py,GEM_R*(1+(g.pop||0)*0.2), g.g); }
+  ctx.restore();
+  // shared fx (additive)
+  ctx.globalCompositeOperation='lighter';
+  for(const rg of rings){ ctx.globalAlpha=Math.max(0,rg.life)*0.6; ctx.strokeStyle=rg.color; ctx.lineWidth=2+3*rg.life; ctx.beginPath(); ctx.arc(rg.x,rg.y,rg.r,0,6.2832); ctx.stroke(); }
+  ctx.lineCap='round';
+  for(const p of particles){ ctx.globalAlpha=Math.max(0,p.life); ctx.strokeStyle=p.color; ctx.lineWidth=p.r; ctx.beginPath(); ctx.moveTo(p.x,p.y); ctx.lineTo(p.x-p.vx*2,p.y-p.vy*2); ctx.stroke(); }
+  ctx.globalCompositeOperation='source-over'; ctx.globalAlpha=1;
+  for(const t of popups){ ctx.globalAlpha=Math.max(0,t.life); ctx.fillStyle=t.c; ctx.font='800 15px system-ui'; ctx.textAlign='center'; ctx.fillText(t.t,t.x,t.y); }
+  ctx.globalAlpha=1; ctx.restore();
+}
+
 // ---------- render ----------
+let frameTick=0;
 function roundRect(x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
 function drawOrb(x,y,r,tier){
   const t=TIERS[tier];
@@ -686,6 +866,7 @@ function drawStone(x,y,r){
 }
 let pointerCol=-1;
 function render(){
+  if(mode==='match3'){ renderM3(); return; }
   ctx.clearRect(0,0,W,H);
   ctx.save();
   if(shake>0) ctx.translate((Math.random()-.5)*shake,(Math.random()-.5)*shake);
@@ -744,7 +925,7 @@ function render(){
   ctx.globalAlpha=1;
   ctx.restore();
 }
-function loop(){ requestAnimationFrame(loop); updateFx(); render(); }
+function loop(){ requestAnimationFrame(loop); frameTick++; updateFx(); render(); }
 
 // ---------- input ----------
 function colFromX(clientX){
@@ -753,11 +934,11 @@ function colFromX(clientX){
   if(x<gridX||x>=gridX+gridW) return -1;
   return Math.floor((x-gridX)/cell);
 }
-canvas.addEventListener('mousemove', e=>{ pointerCol=colFromX(e.clientX); });
+canvas.addEventListener('mousemove', e=>{ if(mode!=='match3') pointerCol=colFromX(e.clientX); });
 canvas.addEventListener('mouseleave', ()=>{ pointerCol=-1; });
-canvas.addEventListener('mousedown', e=>{ const c=colFromX(e.clientX); pointerCol=c; if(c>=0) tryDrop(c); });
-canvas.addEventListener('touchstart', e=>{ const c=colFromX(e.touches[0].clientX); pointerCol=c; if(c>=0) tryDrop(c); e.preventDefault(); }, {passive:false});
-canvas.addEventListener('touchmove', e=>{ pointerCol=colFromX(e.touches[0].clientX); e.preventDefault(); }, {passive:false});
+canvas.addEventListener('mousedown', e=>{ if(mode==='match3'){ m3Pointer(e.clientX,e.clientY); return; } const c=colFromX(e.clientX); pointerCol=c; if(c>=0) tryDrop(c); });
+canvas.addEventListener('touchstart', e=>{ if(mode==='match3'){ m3Pointer(e.touches[0].clientX,e.touches[0].clientY); e.preventDefault(); return; } const c=colFromX(e.touches[0].clientX); pointerCol=c; if(c>=0) tryDrop(c); e.preventDefault(); }, {passive:false});
+canvas.addEventListener('touchmove', e=>{ if(mode!=='match3') pointerCol=colFromX(e.touches[0].clientX); e.preventDefault(); }, {passive:false});
 
 // ---------- level select ----------
 function buildLevelSelect(){
@@ -779,6 +960,7 @@ function hideAll(){ state='menu'; gameWrap.classList.add('hidden'); winScreen.cl
 function showModes(){
   hideAll();
   document.getElementById('bestSurv').textContent = bestSurvival;
+  document.getElementById('bestM3').textContent = m3best;
   // streak + daily status
   const playedToday = prof.lastDay===todayNum();
   const sl = document.getElementById('streakLine');
@@ -818,13 +1000,14 @@ document.getElementById('continueBtn').addEventListener('click', ()=>{ ensureAud
 document.getElementById('modeDaily').addEventListener('click', ()=>{ ensureAudio(); startSurvival(true); });
 document.getElementById('modePuzzle').addEventListener('click', ()=>{ ensureAudio(); showLevels(); });
 document.getElementById('modeSurv').addEventListener('click', ()=>{ ensureAudio(); startSurvival(false); });
+document.getElementById('modeM3').addEventListener('click', ()=>{ ensureAudio(); startMatch3(); });
 document.getElementById('statsBtn').addEventListener('click', showStats);
 document.getElementById('statsBack').addEventListener('click', showModes);
 document.getElementById('homeBtn').addEventListener('click', showModes);
 document.getElementById('winRetry').addEventListener('click', ()=>startLevel(level));
 document.getElementById('winNext').addEventListener('click', ()=>{ const nx=LEVELS.find(l=>l.id===level.id+1); if(nx) startLevel(nx); else showLevels(); });
-loseRetry.addEventListener('click', ()=>{ mode==='survival' ? startSurvival(isDaily) : startLevel(level); });
-loseMenu.addEventListener('click', ()=>{ mode==='survival' ? showModes() : showLevels(); });
+loseRetry.addEventListener('click', ()=>{ mode==='match3' ? startMatch3() : mode==='survival' ? startSurvival(isDaily) : startLevel(level); });
+loseMenu.addEventListener('click', ()=>{ (mode==='survival'||mode==='match3') ? showModes() : showLevels(); });
 
 // expose for testing
 window.OrbitPuzzle = {
@@ -834,6 +1017,10 @@ window.OrbitPuzzle = {
   survival:(d)=>startSurvival(d), levels:LEVELS, COLS, ROWS, current:()=>current, dropRow:(c)=>dropRow(c),
   grid:()=>grid.map(row=>row.map(o=>o?(o.stone?{stone:1}:{tier:o.tier}):null)),
   prof:()=>prof, isDaily:()=>isDaily, ach:()=>ACH.map(a=>({id:a.id,got:!!prof.ach[a.id]})),
+  match3:()=>startMatch3(),
+  m3state:()=>({ mode, state, m3moves, m3score, m3busy, m3best, sel:m3sel }),
+  m3grid:()=>m3.map(row=>row.map(g=>g?g.g:null)),
+  m3swap:(ar,ac,br,bc)=>m3TrySwap({r:ar,c:ac},{r:br,c:bc}),
 };
 
 // responsive canvas (6.7): fit to screen, crisp via DPR, debounced on resize/rotate
