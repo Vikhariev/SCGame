@@ -74,6 +74,19 @@
   .lvl.locked .num{ font-size:18px; }
   .lvl:not(.locked):active{ transform:scale(.95); }
 
+  /* Mode select */
+  #modeSelect{ width:100%; max-width:460px; display:none; flex-direction:column; align-items:center; gap:14px; margin-top:8px; }
+  #modeSelect.show{ display:flex; }
+  #modeSelect h2{ margin:6px 0 0; font-size:24px; }
+  .modes{ display:flex; flex-direction:column; gap:14px; width:100%; }
+  .modecard{ width:100%; display:flex; align-items:center; gap:16px; text-align:left; cursor:pointer; color:var(--ink);
+    background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.12); border-radius:18px; padding:18px 18px; }
+  .modecard:active{ transform:scale(.98); }
+  .mc-ico{ font-size:40px; line-height:1; }
+  .mc-name{ font-size:20px; font-weight:800; }
+  .mc-desc{ font-size:12px; color:var(--muted); margin-top:3px; }
+  .modecard.surv{ border-color:rgba(255,93,115,.35); background:linear-gradient(100deg, rgba(255,93,115,.12), rgba(255,255,255,.05)); }
+
   .hint{ font-size:12px; color:var(--muted); margin-top:2px; text-align:center; max-width:440px; }
   footer{ font-size:11px; color:var(--muted); opacity:.8; margin-top:auto; padding-bottom:4px; }
   .hidden{ display:none !important; }
@@ -92,8 +105,23 @@
     </div>
   </header>
 
+  <!-- MODE SELECT -->
+  <div id="modeSelect" class="show">
+    <h2>Choose a mode</h2>
+    <div class="modes">
+      <button class="modecard" id="modePuzzle">
+        <div class="mc-ico">🧩</div>
+        <div><div class="mc-name">Puzzles</div><div class="mc-desc">12 hand-made levels — plan your moves</div></div>
+      </button>
+      <button class="modecard surv" id="modeSurv">
+        <div class="mc-ico">🌋</div>
+        <div><div class="mc-name">Survival</div><div class="mc-desc">Outrun the rising lava — merge to cool it. Best: <b id="bestSurv">0</b></div></div>
+      </button>
+    </div>
+  </div>
+
   <!-- LEVEL SELECT -->
-  <div id="levelSelect" class="show">
+  <div id="levelSelect">
     <h2>Choose a level</h2>
     <div class="sub">Merge to the goal — but you only get so many drops.</div>
     <div class="levels" id="levelGrid"></div>
@@ -103,7 +131,7 @@
   <div id="gameWrap" class="hidden" style="display:flex;flex-direction:column;align-items:center;gap:8px;">
     <div class="goalbar">
       <div class="g-goal" id="goalText">Goal</div>
-      <div class="g-stat"><div class="lab">Moves</div><div class="val" id="movesVal">0</div></div>
+      <div class="g-stat"><div class="lab" id="movesLab">Moves</div><div class="val" id="movesVal">0</div></div>
       <div class="g-stat"><div class="lab">Score</div><div class="val" id="scoreVal">0</div></div>
     </div>
     <div class="stage">
@@ -118,7 +146,7 @@
         </div>
       </div>
       <div class="overlay" id="loseScreen">
-        <h2 style="color:var(--danger)">Out of moves</h2>
+        <h2 style="color:var(--danger)" id="loseTitle">Out of moves</h2>
         <p id="loseMsg">So close — try a different order.</p>
         <div class="row">
           <button class="ghost" id="loseMenu">Levels</button>
@@ -139,16 +167,21 @@
 // ---------- DOM ----------
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
+const modeSelect = document.getElementById('modeSelect');
 const levelSelect = document.getElementById('levelSelect');
 const levelGrid = document.getElementById('levelGrid');
 const gameWrap = document.getElementById('gameWrap');
 const goalText = document.getElementById('goalText');
+const movesLab = document.getElementById('movesLab');
 const movesVal = document.getElementById('movesVal');
 const scoreVal = document.getElementById('scoreVal');
 const winScreen = document.getElementById('winScreen');
 const loseScreen = document.getElementById('loseScreen');
 const winStars = document.getElementById('winStars');
 const winMsg = document.getElementById('winMsg');
+const loseTitle = document.getElementById('loseTitle');
+const loseRetry = document.getElementById('loseRetry');
+const loseMenu = document.getElementById('loseMenu');
 const hintText = document.getElementById('hintText');
 const soundBtn = document.getElementById('soundBtn');
 
@@ -239,12 +272,20 @@ let shake = 0;
 let busy = false;        // input lock during resolve animation
 let gen = 0;             // bumped each startLevel to cancel stale cascade timers
 
+// Survival mode (variant C): real-time rising lava, cooled only by your merges
+let mode = 'puzzle';     // 'puzzle' | 'survival'
+let lava = 0;            // 0..1 — fraction of the well filled by lava
+let lavaT = 0;           // frames survived (drives acceleration)
+let bestSurvival = parseInt(storeGet('orbitmerge.survival')||'0',10) || 0;
+const SURV = { pool:[0,0,1,1,2], riseBase:0.00085, accelFrames:2400, cool:(nt,combo)=>0.05 + nt*0.018 + (combo-1)*0.025 };
+
 function mkRng(seed){ let s = seed>>>0 || 1; return ()=>{ s=(s*1664525+1013904223)>>>0; return s/4294967296; }; }
 function drawTier(){ return level.pool[Math.floor(rng()*level.pool.length)]; }
 
 // ---------- start / build level ----------
 function startLevel(lv){
   gen++;                 // invalidate any pending cascade timers from a prior run
+  mode = 'puzzle';
   level = lv;
   rng = mkRng(lv.seed);
   grid = emptyGrid();
@@ -254,7 +295,24 @@ function startLevel(lv){
   particles=[]; rings=[]; popups=[]; shake=0; busy=false;
   state = 'play';
   winScreen.classList.remove('show'); loseScreen.classList.remove('show');
-  levelSelect.classList.remove('show');
+  modeSelect.classList.remove('show'); levelSelect.classList.remove('show');
+  gameWrap.classList.remove('hidden');
+  updateHUD();
+}
+
+function startSurvival(){
+  gen++;
+  mode = 'survival';
+  level = { id:'∞', pool:SURV.pool, goal:null, moves:Infinity, stones:[] };
+  rng = Math.random;                 // survival doesn't need determinism
+  grid = emptyGrid();
+  moves = Infinity; score = 0;
+  lava = 0; lavaT = 0;
+  current = drawTier(); next = drawTier();
+  particles=[]; rings=[]; popups=[]; shake=0; busy=false;
+  state = 'play';
+  winScreen.classList.remove('show'); loseScreen.classList.remove('show');
+  modeSelect.classList.remove('show'); levelSelect.classList.remove('show');
   gameWrap.classList.remove('hidden');
   updateHUD();
 }
@@ -266,7 +324,16 @@ function goalString(g){
   return '';
 }
 function updateHUD(){
+  if(mode==='survival'){
+    goalText.innerHTML = '<span class="lvtag">🌋</span> Survive the lava';
+    movesLab.textContent = 'Heat';
+    movesVal.textContent = Math.round(lava*100) + '%';
+    movesVal.classList.toggle('low', lava>=0.7);
+    scoreVal.textContent = score;
+    return;
+  }
   goalText.innerHTML = '<span class="lvtag">Lv ' + level.id + '</span> ' + goalString(level.goal);
+  movesLab.textContent = 'Moves';
   movesVal.textContent = moves;
   movesVal.classList.toggle('low', moves<=3);
   scoreVal.textContent = score;
@@ -355,6 +422,7 @@ function resolveBoard(dropCol){
     // score + fx
     const gain = (nt+1)*10*combo*m.cells.length;
     score += gain;
+    if(mode==='survival'){ lava = Math.max(0, lava - SURV.cool(nt,combo)); }
     const cx=cellCX(anchor[1]), cy=cellCY(anchor[0]);
     spawnPop(cx, cy-ORB_R-4, '+'+gain, TIERS[nt].color);
     if(combo>=2) spawnPop(cx, cy-ORB_R-22, 'CHAIN x'+combo, '#ffd45e');
@@ -370,6 +438,7 @@ function resolveBoard(dropCol){
 }
 function finishResolve(){
   busy=false;
+  if(mode==='survival'){ if(boardFull()) gameOver('jammed'); return; }
   if(checkGoal()){ win(); return; }
   if(moves<=0){ lose(); return; }
   if(boardFull()){ lose(); return; }
@@ -407,9 +476,25 @@ function win(){
 }
 function lose(){
   state='lose';
+  loseTitle.textContent = 'Out of moves';
   document.getElementById('loseMsg').textContent = boardFull() ? 'The board filled up — clear it faster.' : 'Out of moves — try a different order.';
+  loseRetry.textContent = 'Retry'; loseMenu.textContent = 'Levels';
   setTimeout(()=>loseScreen.classList.add('show'), 250);
   blip(160,0.3,'sawtooth',0.16);
+}
+function gameOver(reason){      // survival
+  if(state==='lose') return;
+  state='lose';
+  if(score>bestSurvival){ bestSurvival=score; storeSet('orbitmerge.survival', String(bestSurvival)); }
+  loseTitle.textContent = reason==='meltdown' ? '🌋 Meltdown!' : 'Jammed!';
+  document.getElementById('loseMsg').innerHTML = 'Score <b style="color:var(--accent)">'+score+'</b> · Best '+bestSurvival +
+    (score>=bestSurvival && score>0 ? ' 🎉' : '');
+  loseRetry.textContent = 'Again'; loseMenu.textContent = 'Modes';
+  burst(W/2, gridY+gridH-20, '#ff7043', 80);
+  shake = 20;
+  setTimeout(()=>loseScreen.classList.add('show'), 350);
+  blip(110,0.4,'sawtooth',0.2);
+  if(navigator.vibrate) navigator.vibrate([60,40,120]);
 }
 
 // ---------- effects ----------
@@ -420,6 +505,14 @@ function burst(x,y,color,n){ for(let i=0;i<n;i++){ const a=Math.random()*6.28, s
   if(particles.length>240) particles.splice(0,particles.length-240); }
 function spawnPop(x,y,t,c){ popups.push({x,y,t,c,life:1}); }
 function updateFx(){
+  // survival: lava rises in real time (accelerating), only your merges cool it
+  if(mode==='survival' && state==='play'){
+    lavaT++;
+    const rate = SURV.riseBase * (1 + lavaT/SURV.accelFrames);
+    lava += rate;
+    if(Math.round(lava*100)!==Math.round((lava-rate)*100)) updateHUD();
+    if(lava>=1){ lava=1; gameOver('meltdown'); }
+  }
   for(const p of particles){ p.vy+=0.12; p.x+=p.vx; p.y+=p.vy; p.vx*=0.96; p.life-=0.025; }
   particles=particles.filter(p=>p.life>0);
   for(const t of popups){ t.y-=0.6; t.life-=0.016; }
@@ -476,6 +569,19 @@ function render(){
     else { const y=(o.py!==undefined)?o.py:cellCY(r); const pop=1+(o.pop||0)*0.3; drawOrb(x,y,ORB_R*pop,o.tier); }
   }
 
+  // survival: rising lava (translucent, over the lower orbs)
+  if(mode==='survival' && lava>0){
+    const surf = gridY + gridH - lava*gridH;
+    const lg = ctx.createLinearGradient(0, surf, 0, gridY+gridH);
+    lg.addColorStop(0, 'rgba(255,120,40,0.42)'); lg.addColorStop(1, 'rgba(200,30,20,0.6)');
+    ctx.fillStyle = lg; ctx.fillRect(gridX, surf, gridW, gridY+gridH-surf);
+    // glowing wavy surface
+    ctx.strokeStyle = '#ffb24d'; ctx.lineWidth = 3; ctx.shadowColor='#ff7043'; ctx.shadowBlur=12;
+    ctx.beginPath(); let lfirst=true;
+    for(let x=gridX;x<=gridX+gridW;x+=8){ const yy = surf + Math.sin(x*0.12 + lavaT*0.12)*2.5; if(lfirst){ctx.moveTo(x,yy);lfirst=false;} else ctx.lineTo(x,yy); }
+    ctx.stroke(); ctx.shadowBlur=0;
+  }
+
   // rings + particles (additive)
   ctx.globalCompositeOperation='lighter';
   for(const rg of rings){ ctx.globalAlpha=Math.max(0,rg.life)*0.6; ctx.strokeStyle=rg.color; ctx.lineWidth=2+3*rg.life; ctx.beginPath(); ctx.arc(rg.x,rg.y,rg.r,0,6.2832); ctx.stroke(); }
@@ -530,25 +636,29 @@ function buildLevelSelect(){
     levelGrid.appendChild(el);
   });
 }
-function showMenu(){ state='menu'; gameWrap.classList.add('hidden'); winScreen.classList.remove('show'); loseScreen.classList.remove('show');
-  buildLevelSelect(); levelSelect.classList.add('show'); }
+function hideAll(){ state='menu'; gameWrap.classList.add('hidden'); winScreen.classList.remove('show'); loseScreen.classList.remove('show');
+  modeSelect.classList.remove('show'); levelSelect.classList.remove('show'); }
+function showModes(){ hideAll(); document.getElementById('bestSurv').textContent = bestSurvival; modeSelect.classList.add('show'); }
+function showLevels(){ hideAll(); buildLevelSelect(); levelSelect.classList.add('show'); }
 
-document.getElementById('homeBtn').addEventListener('click', showMenu);
+document.getElementById('modePuzzle').addEventListener('click', ()=>{ ensureAudio(); showLevels(); });
+document.getElementById('modeSurv').addEventListener('click', ()=>{ ensureAudio(); startSurvival(); });
+document.getElementById('homeBtn').addEventListener('click', showModes);
 document.getElementById('winRetry').addEventListener('click', ()=>startLevel(level));
-document.getElementById('winNext').addEventListener('click', ()=>{ const nx=LEVELS.find(l=>l.id===level.id+1); if(nx) startLevel(nx); else showMenu(); });
-document.getElementById('loseRetry').addEventListener('click', ()=>startLevel(level));
-document.getElementById('loseMenu').addEventListener('click', showMenu);
+document.getElementById('winNext').addEventListener('click', ()=>{ const nx=LEVELS.find(l=>l.id===level.id+1); if(nx) startLevel(nx); else showLevels(); });
+loseRetry.addEventListener('click', ()=>{ mode==='survival' ? startSurvival() : startLevel(level); });
+loseMenu.addEventListener('click', ()=>{ mode==='survival' ? showModes() : showLevels(); });
 
 // expose for testing
 window.OrbitPuzzle = {
-  state:()=>({ state, moves, score, busy, maxTier:maxTierOnBoard(), stones:stoneCount(),
+  state:()=>({ state, mode, moves, score, busy, lava:Math.round(lava*100), maxTier:maxTierOnBoard(), stones:stoneCount(),
                win: winScreen.classList.contains('show'), lose: loseScreen.classList.contains('show') }),
-  drop:(c)=>tryDrop(c), start:(id)=>startLevel(LEVELS.find(l=>l.id===id)||LEVELS[0]), levels:LEVELS,
-  COLS, ROWS, current:()=>current, dropRow:(c)=>dropRow(c),
+  drop:(c)=>tryDrop(c), start:(id)=>startLevel(LEVELS.find(l=>l.id===id)||LEVELS[0]), survival:()=>startSurvival(),
+  levels:LEVELS, COLS, ROWS, current:()=>current, dropRow:(c)=>dropRow(c),
   grid:()=>grid.map(row=>row.map(o=>o?(o.stone?{stone:1}:{tier:o.tier}):null)),
 };
 
-buildLevelSelect();
+showModes();
 requestAnimationFrame(loop);
 })();
 </script>

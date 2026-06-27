@@ -1,9 +1,14 @@
-# Orbit Merge — Puzzles
+# Orbit Merge
 
-A casual **merge puzzle** with hand-designed levels. Drop orbs into columns; connect
-2+ of the same number and they merge into the next one. Each level gives you a
-specific **goal** and a **limited number of drops** — so every move is a decision.
-No timers, no auto-play: the board only changes when *you* act.
+A casual **merge** game on a deterministic grid, with two modes:
+
+- **🧩 Puzzles** — 12 hand-designed levels. Each gives a specific goal and a
+  limited number of drops, so every move is a decision.
+- **🌋 Survival** — lava rises in real time and only your merges cool it. Stand
+  still and you melt down; survive as long as you can for a high score.
+
+Connect 2+ of the same number and they merge into the next one (chains score more).
+The board only changes when *you* act — neither mode can play itself.
 
 ## Play
 
@@ -22,6 +27,14 @@ Live: https://vikhariev.github.io/SCGame/
 - You have a fixed number of **drops**. Hit the goal before you run out to win;
   finish with drops to spare for **2–3 stars**.
 - 12 levels with a rising difficulty curve; stars and unlocks are saved locally.
+
+### Survival mode
+
+- Lava rises continuously and **accelerates** the longer you last.
+- Every **merge cools** the lava (bigger merges & chains cool more) — so you must
+  keep merging to stay alive.
+- Meltdown (lava reaches the top) or a jammed board ends the run. Idle = you lose,
+  you never gain score for doing nothing. Best survival score saved locally.
 
 ## Why it's a real puzzle (design notes)
 
