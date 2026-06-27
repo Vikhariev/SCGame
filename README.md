@@ -16,6 +16,13 @@ The board only changes when *you* act — no mode can play itself.
 A **day-streak**, **achievements**, and a **Stats** screen give reasons to come
 back — all saved locally.
 
+## Install it (PWA)
+
+It's an installable Progressive Web App: open the link on your phone and choose
+**Add to Home Screen**. It then launches full-screen like a native app and
+**works offline**. An in-progress run is saved automatically, so you can close
+and **resume** from the mode screen.
+
 ## Play
 
 Open `index.html` in any modern browser — no build step, no dependencies, one

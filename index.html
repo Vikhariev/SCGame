@@ -4,7 +4,14 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
 <meta name="theme-color" content="#0f1020" />
-<title>Orbit Merge — Puzzles</title>
+<link rel="manifest" href="manifest.webmanifest" />
+<link rel="apple-touch-icon" href="apple-touch-icon.png" />
+<link rel="icon" href="icon-192.png" type="image/png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Orbit Merge" />
+<meta name="description" content="A casual merge game — puzzles, survival, and a daily challenge." />
+<title>Orbit Merge</title>
 <style>
   :root{ --bg0:#0b0c1d; --ink:#eef1ff; --muted:#b6bbe8; --accent:#ffd45e; --danger:#ff5d73; --good:#5fd6a6; }
   *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
@@ -87,6 +94,7 @@
   .mc-desc{ font-size:12px; color:var(--muted); margin-top:3px; }
   .modecard.surv{ border-color:rgba(255,93,115,.35); background:linear-gradient(100deg, rgba(255,93,115,.12), rgba(255,255,255,.05)); }
   .modecard.daily{ border-color:rgba(95,214,166,.35); background:linear-gradient(100deg, rgba(95,214,166,.12), rgba(255,255,255,.05)); }
+  .modecard.cont{ border-color:rgba(255,212,94,.45); background:linear-gradient(100deg, rgba(255,212,94,.14), rgba(255,255,255,.05)); }
   .streakline{ font-size:14px; font-weight:700; color:var(--accent); min-height:18px; }
   .streakline .muted{ color:var(--muted); font-weight:600; }
   /* Stats screen */
@@ -125,6 +133,10 @@
   <div id="modeSelect" class="show">
     <div class="streakline" id="streakLine"></div>
     <div class="modes">
+      <button class="modecard cont" id="continueBtn" style="display:none;">
+        <div class="mc-ico">▶️</div>
+        <div><div class="mc-name">Continue</div><div class="mc-desc">Resume your run</div></div>
+      </button>
       <button class="modecard daily" id="modeDaily">
         <div class="mc-ico">📅</div>
         <div><div class="mc-name">Daily Challenge</div><div class="mc-desc" id="dailyDesc">One lava run, same for everyone today.</div></div>
@@ -294,7 +306,6 @@ function emptyGrid(){ const g=[]; for(let r=0;r<ROWS;r++){ const row=[]; for(let
 let grid = emptyGrid();  // grid[r][c] = orb {tier, py, pop} | stone {stone:true, hp} | null
 let current = 0, next = 0;
 let moves = 0, score = 0;
-let rng = mkRng(1);
 let state = 'menu';      // menu | play | resolving | win | lose
 let particles = [], rings = [], popups = [];
 let shake = 0;
@@ -360,8 +371,11 @@ function achToast(a){
   blip(880,0.1,'triangle',0.16); setTimeout(()=>blip(1175,0.14,'triangle',0.14),100);
 }
 
-function mkRng(seed){ let s = seed>>>0 || 1; return ()=>{ s=(s*1664525+1013904223)>>>0; return s/4294967296; }; }
-function drawTier(){ return level.pool[Math.floor(rng()*level.pool.length)]; }
+// Seeded RNG with externally-visible state (so a run can be saved/restored).
+let rngState = 1;
+function srand(seed){ rngState = (seed>>>0) || 1; }
+function rnd(){ rngState = (rngState*1664525 + 1013904223) >>> 0; return rngState/4294967296; }
+function drawTier(){ return level.pool[Math.floor(rnd()*level.pool.length)]; }
 
 // ---------- start / build level ----------
 function startLevel(lv){
@@ -369,7 +383,7 @@ function startLevel(lv){
   registerPlayDay(); runMaxTier=0; runMaxChain=0;
   mode = 'puzzle';
   level = lv;
-  rng = mkRng(lv.seed);
+  srand(lv.seed);
   grid = emptyGrid();
   for(const [r,c] of lv.stones) grid[r][c] = { stone:true, hp:1 };
   moves = lv.moves; score = 0;
@@ -388,7 +402,7 @@ function startSurvival(daily){
   isDaily = !!daily;
   mode = 'survival';
   level = { id: daily?'Daily':'∞', pool:SURV.pool, goal:null, moves:Infinity, stones:[] };
-  rng = daily ? mkRng(todayNum()*7919 + 17) : Math.random; // daily = same run for everyone today
+  srand(daily ? (todayNum()*7919 + 17) : (Math.floor(Math.random()*1e9)+1)); // daily = same run for everyone today
   grid = emptyGrid();
   moves = Infinity; score = 0;
   lava = 0; lavaT = 0;
@@ -399,6 +413,29 @@ function startSurvival(daily){
   modeSelect.classList.remove('show'); levelSelect.classList.remove('show');
   gameWrap.classList.remove('hidden');
   updateHUD();
+}
+
+// ---------- save / resume an in-progress run (6.7) ----------
+function saveGame(){
+  if(state!=='play'){ clearSave(); return; }
+  const g = grid.map(row=>row.map(o=> o ? (o.stone?{s:o.hp}:{t:o.tier}) : 0));
+  storeSet('orbitmerge.save', JSON.stringify({ v:1, mode, levelId:(mode==='puzzle'?level.id:null), pool:level.pool,
+    isDaily, grid:g, current, next, moves:(moves===Infinity?-1:moves), score, lava, lavaT, rngState, runMaxTier, runMaxChain }));
+}
+function clearSave(){ storeSet('orbitmerge.save', ''); }
+function loadSave(){ try{ const s=JSON.parse(storeGet('orbitmerge.save')||''); return (s&&s.v===1&&s.grid)?s:null; }catch(e){ return null; } }
+function restoreGame(s){
+  gen++; hideAll();      // hideAll resets state to 'menu' — must run BEFORE we set 'play'
+  mode = s.mode; isDaily = !!s.isDaily;
+  level = (mode==='puzzle') ? (LEVELS.find(l=>l.id===s.levelId)||LEVELS[0])
+                            : { id:(isDaily?'Daily':'∞'), pool:s.pool||SURV.pool, goal:null, moves:Infinity, stones:[] };
+  grid = s.grid.map((row,r)=>row.map(o=> !o ? null : (o.s!==undefined ? {stone:true,hp:o.s} : {tier:o.t, py:cellCY(r), pop:0})));
+  current = s.current; next = s.next;
+  moves = (s.moves===-1?Infinity:s.moves);
+  score = s.score; lava = s.lava||0; lavaT = s.lavaT||0;
+  rngState = (s.rngState>>>0)||1; runMaxTier = s.runMaxTier||0; runMaxChain = s.runMaxChain||0;
+  particles=[]; rings=[]; popups=[]; shake=0; busy=false;
+  state='play'; gameWrap.classList.remove('hidden'); updateHUD();
 }
 
 function goalString(g){
@@ -523,10 +560,11 @@ function resolveBoard(dropCol){
 }
 function finishResolve(){
   busy=false;
-  if(mode==='survival'){ if(boardFull()) gameOver('jammed'); return; }
+  if(mode==='survival'){ if(boardFull()){ gameOver('jammed'); return; } saveGame(); return; }
   if(checkGoal()){ win(); return; }
   if(moves<=0){ lose(); return; }
   if(boardFull()){ lose(); return; }
+  saveGame();
 }
 function boardFull(){ for(let c=0;c<COLS;c++) if(grid[0][c]===null) return false; return true; }
 function maxTierOnBoard(){ let m=-1; for(let r=0;r<ROWS;r++) for(let c=0;c<COLS;c++){ const o=grid[r][c]; if(o&&!o.stone&&o.tier>m) m=o.tier; } return m; }
@@ -547,7 +585,7 @@ function starsForWin(){
   return 1;
 }
 function win(){
-  state='win';
+  state='win'; clearSave();
   const stars = starsForWin();
   const prev = progress.stars[level.id]||0;
   if(stars>prev) progress.stars[level.id]=stars;
@@ -563,7 +601,7 @@ function win(){
   blip(523,0.13,'triangle',0.18); setTimeout(()=>blip(784,0.16,'triangle',0.16),110); setTimeout(()=>blip(1046,0.2,'triangle',0.14),230);
 }
 function lose(){
-  state='lose';
+  state='lose'; clearSave();
   loseTitle.textContent = 'Out of moves';
   document.getElementById('loseMsg').textContent = boardFull() ? 'The board filled up — clear it faster.' : 'Out of moves — try a different order.';
   loseRetry.textContent = 'Retry'; loseMenu.textContent = 'Levels';
@@ -572,7 +610,7 @@ function lose(){
 }
 function gameOver(reason){      // survival
   if(state==='lose') return;
-  state='lose';
+  state='lose'; clearSave();
   const isBest = score>bestSurvival;
   if(isBest){ bestSurvival=score; storeSet('orbitmerge.survival', String(bestSurvival)); }
   // retention stats + daily best
@@ -753,6 +791,12 @@ function showModes(){
     : `One lava run, same for everyone today.`;
   const solved = Object.keys(progress.stars||{}).length;
   document.getElementById('puzzleDesc').textContent = solved>0 ? `${solved}/12 solved · plan your moves` : '12 hand-made levels — plan your moves';
+  // resume card
+  const sv = loadSave();
+  const cont = document.getElementById('continueBtn');
+  if(sv){ cont.style.display='flex';
+    cont.querySelector('.mc-desc').textContent = (sv.mode==='puzzle'?('Level '+sv.levelId):(sv.isDaily?'Daily':'Survival')) + ' · score '+sv.score;
+  } else cont.style.display='none';
   modeSelect.classList.add('show');
 }
 function showLevels(){ hideAll(); buildLevelSelect(); levelSelect.classList.add('show'); }
@@ -770,6 +814,7 @@ function showStats(){
   statsScreen.classList.add('show');
 }
 
+document.getElementById('continueBtn').addEventListener('click', ()=>{ ensureAudio(); const sv=loadSave(); if(sv) restoreGame(sv); else showModes(); });
 document.getElementById('modeDaily').addEventListener('click', ()=>{ ensureAudio(); startSurvival(true); });
 document.getElementById('modePuzzle').addEventListener('click', ()=>{ ensureAudio(); showLevels(); });
 document.getElementById('modeSurv').addEventListener('click', ()=>{ ensureAudio(); startSurvival(false); });
@@ -791,8 +836,31 @@ window.OrbitPuzzle = {
   prof:()=>prof, isDaily:()=>isDaily, ach:()=>ACH.map(a=>({id:a.id,got:!!prof.ach[a.id]})),
 };
 
+// responsive canvas (6.7): fit to screen, crisp via DPR, debounced on resize/rotate
+function fitCanvas(){
+  const maxW = Math.min(440, window.innerWidth - 20);
+  const maxH = window.innerHeight - 210;
+  let w = maxW, h = w*(H/W);
+  if(h>maxH){ h=maxH; w=h*(W/H); }
+  canvas.style.width = w+'px'; canvas.style.height = h+'px';
+  const dpr = Math.min(window.devicePixelRatio||1, 2);
+  canvas.width = Math.round(W*dpr); canvas.height = Math.round(H*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+}
+let _rt; window.addEventListener('resize', ()=>{ clearTimeout(_rt); _rt=setTimeout(fitCanvas,150); });
+window.addEventListener('orientationchange', ()=>setTimeout(fitCanvas,250));
+// persist an in-progress run when leaving/backgrounding
+window.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='hidden') saveGame(); });
+window.addEventListener('pagehide', saveGame);
+
+fitCanvas();
 showModes();
 requestAnimationFrame(loop);
+
+// PWA: register the service worker for offline + installability
+if('serviceWorker' in navigator){
+  window.addEventListener('load', ()=>{ navigator.serviceWorker.register('sw.js').catch(()=>{}); });
+}
 })();
 </script>
 </body>
