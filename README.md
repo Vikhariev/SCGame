@@ -1,49 +1,46 @@
-# Orbit Merge: Reactor
+# Orbit Merge — Puzzles
 
-A juicy, instantly-playable casual **merge roguelite**. Drop orbs, merge matching
-pairs — but the **Reactor** keeps pushing new rows up from below and **speeds up**
-over time, so you can never sit still. Survive waves, draft **perks** between them,
-earn **Bombs** with big chains, and see how far you get before the jar overflows.
+A casual **merge puzzle** with hand-designed levels. Drop orbs into columns; connect
+2+ of the same number and they merge into the next one. Each level gives you a
+specific **goal** and a **limited number of drops** — so every move is a decision.
+No timers, no auto-play: the board only changes when *you* act.
 
 ## Play
 
 Open `index.html` in any modern browser — no build step, no dependencies, one
-self-contained file. Works on desktop (mouse / keyboard) and mobile (touch).
+self-contained file. Works on desktop (mouse) and mobile (touch).
 
 Live: https://vikhariev.github.io/SCGame/
 
 ## How to play
 
-- **Move** your finger / mouse to aim, **release** to drop.
-- Two orbs of the **same tier merge** into the next one (number shown on each orb).
-- The **Reactor** sends a rising **surge** of orbs from the floor on a timer that
-  accelerates — keep merging to hold the line. If settled orbs cross the red line,
-  the jar **overflows** and the run ends.
-- Survive a wave's surges → **draft 1 of 3 perks**. Perks stack across the run.
-- Chain **4+ merges** to earn a **💣 Bomb** — tap the bomb button to arm it, then
-  drop it to blast a cluster (great for emergencies).
+- **Tap a column** to drop the current orb; it falls to the bottom.
+- Orbs of the **same number** that connect (up/down/left/right) **merge** into the
+  next number — and merges can **chain** for bonus points.
+- Each level has a **goal**: make a target number, reach a score, or **clear all
+  stones** (stones break when a merge happens next to them).
+- You have a fixed number of **drops**. Hit the goal before you run out to win;
+  finish with drops to spare for **2–3 stars**.
+- 12 levels with a rising difficulty curve; stars and unlocks are saved locally.
 
-## Roguelite systems
+## Why it's a real puzzle (design notes)
 
-- **Reactor surges** — the board fills itself; difficulty escalates within and
-  across waves. This is what makes every drop a decision under pressure (and what
-  removes the old "merge forever" equilibrium).
-- **Waves + perk drafts** — between waves pick one of three perks:
-  Coolant (slower surges), Bigger Bombs, Trigger Finger (bombs on shorter chains),
-  Wild Spawns, Greed (+score), Stockpile (bombs each wave), Shield (survive an
-  overflow), Quick Hands (faster drops). Builds create real run-to-run variety.
-- **Special orbs** — **Bombs** (earned via chains) and **Wild** orbs (from the
-  Wild perk) that match any neighbour.
-- **Stars** — forge the top tier; two Stars **annihilate** for a huge bonus.
+- **Deterministic** — each level's orb sequence is seeded, so it's the same every
+  attempt: solvable and fair, not luck. (Visual randomness is kept separate from
+  the gameplay RNG.)
+- **The board only changes on your input** — there is no Reactor/timer feeding the
+  board, so the game cannot "play itself."
+- **Move limits + goals + obstacles** create the challenge; all 12 levels are
+  verified solvable, and random mashing only wins the early tutorial levels.
 
 ## Tech / features
 
-- Custom lightweight 2D circle physics (gravity, collisions, restitution, substeps).
-- Combo multiplier on chained merges, particle bursts, shockwave rings, screen shake.
-- WebAudio sound — musical merge scale, combo pitch ladder, Star stinger (toggleable).
-- First-run interactive tutorial, pause/restart, predictive landing marker.
-- Lightweight analytics layer (`window.OrbitMerge.analytics.log()`; `?debug=1` to log).
-- Single `CONFIG` object holds all balance knobs. Best score saved locally.
-- Fully responsive canvas — scales to phone or desktop.
+- Deterministic grid engine: drop → flood-fill same-tier components → merge →
+  gravity → cascade, all resolved on each move.
+- Stones as breakable obstacles; goals: reach-tier / score / clear.
+- Combo/chain scoring, particle bursts, shockwave rings, screen shake.
+- WebAudio sound — musical merge scale + chain pitch ladder + win jingle (toggle).
+- Level select with stars, progress saved to localStorage (safe fallback if blocked).
+- Fully responsive canvas. No frameworks, no assets — pure HTML/CSS/JS.
 
-No frameworks, no assets — pure HTML/CSS/JS.
+> The earlier physics "drop & merge" / Reactor experiments live in the git history.
