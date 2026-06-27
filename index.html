@@ -774,21 +774,37 @@ function m3CellFromXY(clientX,clientY){
   if(x<m3X||x>=m3X+m3W||y<m3Y||y>=m3Y+m3H) return null;
   return { c:Math.floor((x-m3X)/m3cell), r:Math.floor((y-m3Y)/m3cell) };
 }
-function m3Pointer(clientX,clientY){
-  if(mode!=='match3'||state!=='play'||m3busy) return;
-  const cell=m3CellFromXY(clientX,clientY); if(!cell) return;
-  if(!m3sel){ m3sel=cell; blip(330,0.05,'sine',0.08); return; }
-  if(m3sel.r===cell.r && m3sel.c===cell.c){ m3sel=null; return; }
-  if(Math.abs(m3sel.r-cell.r)+Math.abs(m3sel.c-cell.c)===1){ const a=m3sel; m3sel=null; m3TrySwap(a,cell); }
-  else { m3sel=cell; blip(330,0.05,'sine',0.08); }
+// Input: swipe a gem toward a neighbour (primary) OR tap-then-tap-neighbour (fallback).
+let m3press = null;
+function m3Down(clientX,clientY){
+  if(mode!=='match3'||state!=='play'||m3busy){ m3press=null; return; }
+  const cell=m3CellFromXY(clientX,clientY); if(!cell){ m3sel=null; m3press=null; return; }
+  // tap-to-swap: a different, adjacent cell was already selected
+  if(m3sel && (Math.abs(m3sel.r-cell.r)+Math.abs(m3sel.c-cell.c)===1)){ const a=m3sel; m3sel=null; m3press=null; m3TrySwap(a,cell); return; }
+  m3sel=cell; m3press={ cell, x:clientX, y:clientY, moved:false };
+  blip(330,0.05,'sine',0.07);
 }
+function m3Move(clientX,clientY){
+  if(!m3press || m3press.moved || m3busy) return;
+  const dx=clientX-m3press.x, dy=clientY-m3press.y;
+  const rect=canvas.getBoundingClientRect();
+  const thresh=Math.max(10, (m3cell*(rect.width/W))*0.35); // ~1/3 of a cell, in client px
+  if(Math.abs(dx)<thresh && Math.abs(dy)<thresh) return;
+  m3press.moved=true;
+  let tr=m3press.cell.r, tc=m3press.cell.c;
+  if(Math.abs(dx)>Math.abs(dy)) tc += (dx>0?1:-1); else tr += (dy>0?1:-1);
+  const from=m3press.cell; m3press=null; m3sel=null;
+  if(tr>=0&&tr<M3R&&tc>=0&&tc<M3C) m3TrySwap(from,{r:tr,c:tc});
+}
+function m3Up(){ m3press=null; }
 function startMatch3(){
   gen++; registerPlayDay();
-  mode='match3'; m3sel=null; m3moves=M3MOVES; m3score=0; m3busy=false;
+  hideAll();              // hideAll resets state to 'menu' — must run BEFORE we set 'play'
+  mode='match3'; m3sel=null; m3press=null; m3moves=M3MOVES; m3score=0; m3busy=false;
   m3NewBoard();
   particles=[]; rings=[]; popups=[]; shake=0;
   state='play';
-  hideAll(); gameWrap.classList.remove('hidden'); updateHUD();
+  gameWrap.classList.remove('hidden'); updateHUD();
 }
 function m3GameOver(){
   if(state==='lose') return;
@@ -934,11 +950,13 @@ function colFromX(clientX){
   if(x<gridX||x>=gridX+gridW) return -1;
   return Math.floor((x-gridX)/cell);
 }
-canvas.addEventListener('mousemove', e=>{ if(mode!=='match3') pointerCol=colFromX(e.clientX); });
+canvas.addEventListener('mousemove', e=>{ if(mode==='match3'){ m3Move(e.clientX,e.clientY); return; } pointerCol=colFromX(e.clientX); });
 canvas.addEventListener('mouseleave', ()=>{ pointerCol=-1; });
-canvas.addEventListener('mousedown', e=>{ if(mode==='match3'){ m3Pointer(e.clientX,e.clientY); return; } const c=colFromX(e.clientX); pointerCol=c; if(c>=0) tryDrop(c); });
-canvas.addEventListener('touchstart', e=>{ if(mode==='match3'){ m3Pointer(e.touches[0].clientX,e.touches[0].clientY); e.preventDefault(); return; } const c=colFromX(e.touches[0].clientX); pointerCol=c; if(c>=0) tryDrop(c); e.preventDefault(); }, {passive:false});
-canvas.addEventListener('touchmove', e=>{ if(mode!=='match3') pointerCol=colFromX(e.touches[0].clientX); e.preventDefault(); }, {passive:false});
+canvas.addEventListener('mousedown', e=>{ if(mode==='match3'){ m3Down(e.clientX,e.clientY); return; } const c=colFromX(e.clientX); pointerCol=c; if(c>=0) tryDrop(c); });
+window.addEventListener('mouseup', ()=>{ if(mode==='match3') m3Up(); });
+canvas.addEventListener('touchstart', e=>{ if(mode==='match3'){ m3Down(e.touches[0].clientX,e.touches[0].clientY); e.preventDefault(); return; } const c=colFromX(e.touches[0].clientX); pointerCol=c; if(c>=0) tryDrop(c); e.preventDefault(); }, {passive:false});
+canvas.addEventListener('touchmove', e=>{ if(mode==='match3'){ if(e.touches[0]) m3Move(e.touches[0].clientX,e.touches[0].clientY); e.preventDefault(); return; } pointerCol=colFromX(e.touches[0].clientX); e.preventDefault(); }, {passive:false});
+canvas.addEventListener('touchend', e=>{ if(mode==='match3'){ m3Up(); e.preventDefault(); } }, {passive:false});
 
 // ---------- level select ----------
 function buildLevelSelect(){
@@ -1021,6 +1039,7 @@ window.OrbitPuzzle = {
   m3state:()=>({ mode, state, m3moves, m3score, m3busy, m3best, sel:m3sel }),
   m3grid:()=>m3.map(row=>row.map(g=>g?g.g:null)),
   m3swap:(ar,ac,br,bc)=>m3TrySwap({r:ar,c:ac},{r:br,c:bc}),
+  m3xy:(r,c)=>({x:m3cx(c), y:m3cy(r)}), W, H,
 };
 
 // responsive canvas (6.7): fit to screen, crisp via DPR, debounced on resize/rotate
