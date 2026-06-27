@@ -34,6 +34,8 @@
     background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.08); border-radius:14px; padding:8px 14px; }
   .goalbar .g-goal{ font-size:14px; font-weight:700; }
   .goalbar .g-goal b{ color:var(--accent); }
+  .goalbar .lvtag{ display:inline-block; background:rgba(255,212,94,.16); color:var(--accent);
+    border:1px solid rgba(255,212,94,.35); border-radius:8px; padding:1px 7px; font-size:12px; font-weight:800; margin-right:4px; }
   .goalbar .g-stat{ text-align:center; }
   .goalbar .g-stat .lab{ font-size:9px; color:var(--muted); letter-spacing:1.5px; text-transform:uppercase; }
   .goalbar .g-stat .val{ font-size:18px; font-weight:800; line-height:1; }
@@ -264,7 +266,7 @@ function goalString(g){
   return '';
 }
 function updateHUD(){
-  goalText.innerHTML = 'Goal: ' + goalString(level.goal);
+  goalText.innerHTML = '<span class="lvtag">Lv ' + level.id + '</span> ' + goalString(level.goal);
   movesVal.textContent = moves;
   movesVal.classList.toggle('low', moves<=3);
   scoreVal.textContent = score;
