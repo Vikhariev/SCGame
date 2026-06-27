@@ -337,13 +337,18 @@ let isDaily = false;     // current survival run is the Daily Challenge
 let runMaxTier = 0, runMaxChain = 0; // per-run stats for achievements
 
 // ---------- Match-3 mode ----------
+// Faceted "cut jewel" gems: each is a polygon whose facets are shaded by a light
+// direction, so the SHAPE itself reads as volumetric (no flat overlay film).
+function mkPoly(n, rot){ const p=[]; for(let i=0;i<n;i++){ const a=rot + i*2*Math.PI/n; p.push([Math.cos(a), Math.sin(a)]); } return p; }
+const POLY_KITE = [[0,-1.06],[0.82,0],[0,1.06],[-0.82,0]];
+const POLY_TRI  = [[0,-1.02],[0.93,0.66],[-0.93,0.66]];
 const GEMS = [
-  { c:'#ff5168', g:'#b3142e', hi:'#ff9aa6', shape:'circle'   },
-  { c:'#ff9f3c', g:'#c4660a', hi:'#ffc880', shape:'diamond'  },
-  { c:'#ffe14d', g:'#cf9a00', hi:'#fff29a', shape:'rsquare'  },
-  { c:'#36d98f', g:'#1d8a58', hi:'#86f0c0', shape:'triangle' },
-  { c:'#3fb4ff', g:'#1564c4', hi:'#9bd8ff', shape:'hex'      },
-  { c:'#c07bff', g:'#6e2fcf', hi:'#dfb6ff', shape:'star'     },
+  { rgb:[235,46,74],  c:'#eb2e4a', hi:'#ff9aa6', glow:'#7e0f24', dark:'#560a18', poly:mkPoly(14,-Math.PI/2) }, // ruby — round
+  { rgb:[42,206,132], c:'#2ace84', hi:'#9bf2cc', glow:'#106b44', dark:'#0b4530', poly:mkPoly(6, Math.PI/6)  }, // emerald — hex
+  { rgb:[255,201,64], c:'#ffc940', hi:'#fff0a8', glow:'#9a6a00', dark:'#6b4a00', poly:mkPoly(5,-Math.PI/2)  }, // topaz — pentagon
+  { rgb:[72,150,255], c:'#4896ff', hi:'#a9d2ff', glow:'#143f86', dark:'#0d2a5c', poly:mkPoly(8, Math.PI/8)  }, // sapphire — octagon
+  { rgb:[183,113,255],c:'#b771ff', hi:'#e2c2ff', glow:'#4e1f9a', dark:'#34155f', poly:POLY_KITE             }, // amethyst — kite
+  { rgb:[255,112,150],c:'#ff7096', hi:'#ffb6c9', glow:'#a01f4f', dark:'#6e1638', poly:POLY_TRI              }, // coral — trillion
 ];
 const NGEM = 6, M3MOVES = 25; // M3C/M3R declared with the layout consts (used there)
 let m3 = [], m3sel = null, m3moves = 0, m3score = 0, m3busy = false, m3lastSwap = null;
@@ -933,36 +938,59 @@ function m3GameOver(){
   setTimeout(()=>loseScreen.classList.add('show'), 250);
   blip(160,0.3,'sawtooth',0.16);
 }
-function gemPath(x,y,r,shape){
-  if(shape==='circle'){ ctx.beginPath(); ctx.arc(x,y,r,0,6.2832); }
-  else if(shape==='diamond'){ ctx.beginPath(); ctx.moveTo(x,y-r); ctx.lineTo(x+r,y); ctx.lineTo(x,y+r); ctx.lineTo(x-r,y); ctx.closePath(); }
-  else if(shape==='rsquare'){ const s=r*0.92; roundRect(x-s,y-s,s*2,s*2,r*0.36); }
-  else if(shape==='triangle'){ ctx.beginPath(); ctx.moveTo(x,y-r); ctx.lineTo(x+r*0.92,y+r*0.72); ctx.lineTo(x-r*0.92,y+r*0.72); ctx.closePath(); }
-  else if(shape==='hex'){ ctx.beginPath(); for(let i=0;i<6;i++){ const a=Math.PI/6+i*Math.PI/3, px=x+Math.cos(a)*r, py=y+Math.sin(a)*r; i?ctx.lineTo(px,py):ctx.moveTo(px,py); } ctx.closePath(); }
-  else { ctx.beginPath(); for(let i=0;i<10;i++){ const a=-Math.PI/2+i*Math.PI/5, rr=(i%2?r*0.46:r), px=x+Math.cos(a)*rr, py=y+Math.sin(a)*rr; i?ctx.lineTo(px,py):ctx.moveTo(px,py); } ctx.closePath(); }
+function mix3(a,b,t){ return 'rgb('+((a[0]+(b[0]-a[0])*t)|0)+','+((a[1]+(b[1]-a[1])*t)|0)+','+((a[2]+(b[2]-a[2])*t)|0)+')'; }
+function gemOutlinePath(x,y,r,gi){
+  const P=GEMS[gi].poly; ctx.beginPath();
+  for(let i=0;i<P.length;i++){ const px=x+P[i][0]*r, py=y+P[i][1]*r; i?ctx.lineTo(px,py):ctx.moveTo(px,py); }
+  ctx.closePath();
 }
+// Faceted cut-jewel: the SOLID is built from shaded triangular facets (girdle
+// ring + crown fan over a table), each lit by a fixed light direction. The form
+// itself is volumetric — there is no flat highlight sheet laid over a flat shape.
 function drawGem(x,y,r,gi){
-  const G=GEMS[gi], shape=G.shape, rr=(shape==='star')?r*1.04:r;
+  const G=GEMS[gi], P=G.poly, n=P.length, base=G.rgb;
+  const dk=[base[0]*0.26|0, base[1]*0.26|0, base[2]*0.26|0];
+  const lt=[base[0]+(255-base[0])*0.78|0, base[1]+(255-base[1])*0.78|0, base[2]+(255-base[2])*0.78|0];
+  const Lx=-0.52, Ly=-0.85;           // light comes from upper-left
+  const st=0.46;                       // table (top facet) scale
   ctx.save();
-  // 1 contact shadow
-  ctx.globalAlpha=0.22; ctx.fillStyle='#000'; gemPath(x, y+r*0.14, rr*0.95, shape); ctx.fill(); ctx.globalAlpha=1;
-  // 2 dark bevel rim (with subtle glow)
-  ctx.shadowColor=G.g; ctx.shadowBlur=8; ctx.fillStyle=G.g; gemPath(x,y,rr,shape); ctx.fill(); ctx.shadowBlur=0;
-  // 3 body gradient + 4 glassy top highlight (clipped to inset shape)
-  ctx.save(); gemPath(x,y,rr*0.9,shape); ctx.clip();
-  const grd=ctx.createRadialGradient(x-r*0.3,y-r*0.38,r*0.05,x,y,r*0.95);
-  grd.addColorStop(0,G.hi); grd.addColorStop(0.45,G.c); grd.addColorStop(1,G.g);
-  ctx.fillStyle=grd; ctx.fillRect(x-rr,y-rr,rr*2,rr*2);
-  const lg=ctx.createLinearGradient(0,y-rr,0,y);
-  lg.addColorStop(0,'rgba(255,255,255,0.5)'); lg.addColorStop(1,'rgba(255,255,255,0)');
-  ctx.fillStyle=lg; ctx.fillRect(x-rr,y-rr,rr*2,rr);
-  ctx.restore();
-  // 5 small bright specular + 6 large soft halo
-  ctx.globalAlpha=0.9; ctx.fillStyle='#fff'; ctx.beginPath(); ctx.ellipse(x-r*0.30,y-r*0.36,r*0.15,r*0.10,0,0,6.2832); ctx.fill();
-  ctx.globalAlpha=0.12; ctx.beginPath(); ctx.arc(x-r*0.22,y-r*0.26,r*0.33,0,6.2832); ctx.fill(); ctx.globalAlpha=1;
-  // 7 lower rim-light
-  ctx.globalAlpha=0.28; ctx.strokeStyle=G.hi; ctx.lineWidth=r*0.10; ctx.lineCap='round';
-  ctx.beginPath(); ctx.arc(x,y,rr*0.8, Math.PI*0.18, Math.PI*0.82); ctx.stroke(); ctx.globalAlpha=1;
+  // contact shadow on the cradle
+  ctx.globalAlpha=0.3; ctx.fillStyle='#000';
+  ctx.beginPath(); for(let i=0;i<n;i++){ const px=x+P[i][0]*r*0.97, py=y+P[i][1]*r*0.97+r*0.17; i?ctx.lineTo(px,py):ctx.moveTo(px,py);} ctx.closePath(); ctx.fill();
+  ctx.globalAlpha=1;
+  // outer + table vertex rings
+  const Vo=[],Vt=[];
+  for(let i=0;i<n;i++){ Vo.push([x+P[i][0]*r, y+P[i][1]*r]); Vt.push([x+P[i][0]*r*st, y+P[i][1]*r*st]); }
+  // soft coloured glow behind the silhouette
+  ctx.shadowColor=G.glow; ctx.shadowBlur=12;
+  ctx.beginPath(); for(let i=0;i<n;i++){ i?ctx.lineTo(Vo[i][0],Vo[i][1]):ctx.moveTo(Vo[i][0],Vo[i][1]); } ctx.closePath();
+  ctx.fillStyle=mix3(dk,base,0.45); ctx.fill();
+  ctx.shadowBlur=0;
+  const shade=(mx,my,a,b)=>{ const ml=Math.hypot(mx,my)||1; let t=0.5+0.5*((mx/ml)*Lx+(my/ml)*Ly); t=t<0?0:t>1?1:t; return t<0.5?mix3(a,base,t*2):mix3(base,b,(t-0.5)*2); };
+  // girdle facets (the bevelled sides) — two triangles per edge, each shaded by its own normal
+  for(let i=0;i<n;i++){ const j=(i+1)%n;
+    const tris=[ [Vo[i],Vo[j],Vt[i]], [Vo[j],Vt[j],Vt[i]] ];
+    for(const t of tris){
+      const mx=(t[0][0]+t[1][0]+t[2][0])/3-x, my=(t[0][1]+t[1][1]+t[2][1])/3-y;
+      ctx.beginPath(); ctx.moveTo(t[0][0],t[0][1]); ctx.lineTo(t[1][0],t[1][1]); ctx.lineTo(t[2][0],t[2][1]); ctx.closePath();
+      ctx.fillStyle=shade(mx,my,dk,lt); ctx.fill();
+      ctx.strokeStyle='rgba(0,0,0,0.12)'; ctx.lineWidth=0.6; ctx.stroke();
+    }
+  }
+  // crown fan: table edges to centre apex — top sparkle facets
+  for(let i=0;i<n;i++){ const j=(i+1)%n;
+    const mx=(Vt[i][0]+Vt[j][0]+x)/3-x, my=(Vt[i][1]+Vt[j][1]+y)/3-y;
+    ctx.beginPath(); ctx.moveTo(Vt[i][0],Vt[i][1]); ctx.lineTo(Vt[j][0],Vt[j][1]); ctx.lineTo(x,y); ctx.closePath();
+    ctx.fillStyle=shade(mx,my,base,lt); ctx.fill();
+    ctx.strokeStyle='rgba(255,255,255,0.10)'; ctx.lineWidth=0.5; ctx.stroke();
+  }
+  // crisp outer edge
+  ctx.beginPath(); for(let i=0;i<n;i++){ i?ctx.lineTo(Vo[i][0],Vo[i][1]):ctx.moveTo(Vo[i][0],Vo[i][1]); } ctx.closePath();
+  ctx.strokeStyle='rgba(255,255,255,0.16)'; ctx.lineWidth=1; ctx.stroke();
+  // sharp specular glint on the light-facing crown
+  ctx.globalAlpha=0.9; ctx.fillStyle='#fff';
+  ctx.beginPath(); ctx.ellipse(x+Lx*r*0.42, y+Ly*r*0.42, r*0.11, r*0.06, -0.5, 0, 6.2832); ctx.fill();
+  ctx.globalAlpha=1;
   ctx.restore();
 }
 function drawSpecialMark(x,y,r,type){
@@ -1022,7 +1050,7 @@ function renderM3(){
     ctx.save(); ctx.translate(g.px,gy); ctx.scale(1+sq*0.18,1-sq*0.18); ctx.translate(-g.px,-gy);
     drawGem(g.px,gy,rad,g.g);
     if(g.special) drawSpecialMark(g.px,gy,rad,g.special);
-    if(g.flash>0){ ctx.globalAlpha=g.flash*0.8; ctx.fillStyle='#fff'; gemPath(g.px,gy,rad,GEMS[g.g].shape); ctx.fill(); ctx.globalAlpha=1; }
+    if(g.flash>0){ ctx.globalAlpha=g.flash*0.8; ctx.fillStyle='#fff'; gemOutlinePath(g.px,gy,rad,g.g); ctx.fill(); ctx.globalAlpha=1; }
     ctx.restore();
   }
   ctx.restore();
